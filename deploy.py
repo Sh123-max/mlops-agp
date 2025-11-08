@@ -5,7 +5,7 @@ import mlflow
 from mlflow.tracking import MlflowClient
 
 MODEL_DIR = os.getenv("MODEL_DIR", "models")
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 client = MlflowClient()
 
