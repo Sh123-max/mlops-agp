@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init_governance_db.sql:/docker-entrypoint-initdb.d/init_governance_db.sql
+
+  mlflow:
+    image: python:3.10-slim
+    depends_on:
+      - postgres
+    volumes:
+      - ./mlflow_artifacts:/mlflow/artifacts
+      - ./:/app
+    working_dir: /app
+    command: bash -lc "pip install mlflow psycopg2-binary && mlflow server --backend-store-uri ${MLFLOW_BACKEND_STORE_URI} --default-artifact-root ${MLFLOW_ARTIFACT_ROOT} --host 0.0.0.0 --port 5001"
+    ports:
+      - "5001:5001"
+
+  pushgateway:
+    image: prom/pushgateway:v1.5.1
+    ports:
+      - "9091:9091"
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml
+    ports:
+      - "9090:9090"
+
+  alertmanager:
+    image: prom/alertmanager:v0.25.0
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    ports:
+      - "9093:9093"
+
+  grafana:
+    image: grafana/grafana-oss:10.0.4
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  postgres-data:
+  grafana-data:
+  mlflow-artifacts:
