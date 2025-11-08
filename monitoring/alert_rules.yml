@@ -1,0 +1,11 @@
+groups:
+- name: model_alerts
+  rules:
+  - alert: ModelPerformanceDrop
+    expr: avg_over_time(model_weighted_score{project="diabetes"}[15m]) < 0.60
+    for: 10m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Diabetes model weighted score below 0.60"
+      description: "Model weighted score has been below 0.60 for 10 minutes; consider automatic retrain."
