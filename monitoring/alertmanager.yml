@@ -6,5 +6,5 @@ route:
 receivers:
 - name: 'jenkins-webhook'
   webhook_configs:
-    - url: 'http://<JENKINS_HOST>:8080/generic-webhook-trigger/invoke?token=${JENKINS_WEBHOOK_TOKEN}'
+    - url: 'http://host.docker.internal:8080/generic-webhook-trigger/invoke?token=${JENKINS_WEBHOOK_TOKEN}'
       send_resolved: true
