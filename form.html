@@ -1,0 +1,51 @@
+<!-- form.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Diabetes Prediction</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 700px; margin: 30px auto; }
+    label { display: block; margin-top: 8px; }
+    input[type="text"] { width: 100%; padding: 6px; }
+    .btn { margin-top: 12px; padding: 10px 14px; background: #007bff; color: white; border: none; cursor: pointer; }
+    .result { margin-top: 16px; padding: 12px; background: #f8f9fa; border-radius: 6px; }
+    .error { color: red; }
+  </style>
+</head>
+<body>
+  <h2>Diabetes Prediction</h2>
+  <form action="/predict" method="post">
+    <label>Pregnancies <input type="text" name="Pregnancies"></label>
+    <label>Glucose <input type="text" name="Glucose"></label>
+    <label>BloodPressure <input type="text" name="BloodPressure"></label>
+    <label>SkinThickness <input type="text" name="SkinThickness"></label>
+    <label>Insulin <input type="text" name="Insulin"></label>
+    <label>BMI <input type="text" name="BMI"></label>
+    <label>DiabetesPedigreeFunction <input type="text" name="DiabetesPedigreeFunction"></label>
+    <label>Age <input type="text" name="Age"></label>
+    <button type="submit" class="btn">Predict</button>
+  </form>
+
+  {% if prediction %}
+    <div class="result">
+      <strong>Prediction:</strong> {{ prediction }} <br>
+      <strong>Probability:</strong> {{ probability }}
+    </div>
+  {% endif %}
+
+  {% if error_messages %}
+    <div class="result error">
+      <strong>Errors:</strong>
+      <ul>
+        {% for e in error_messages %}
+          <li>{{ e }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  <hr>
+  <div>Model: {{ model_name }} | Metrics: {{ model_metrics }}</div>
+</body>
+</html>
