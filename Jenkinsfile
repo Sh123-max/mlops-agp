@@ -9,8 +9,8 @@ pipeline {
     MKL_NUM_THREADS = '2'
     OPENBLAS_NUM_THREADS = '2'
     NUM_WORKER_THREADS = '3'
-    MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://<MLFLOW_HOST>:5000'}"
-    PUSHGATEWAY_URL = "${env.PUSHGATEWAY_URL ?: 'http://<PUSHGATEWAY_HOST>:9091'}"
+    MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
+    PUSHGATEWAY_URL = "${env.PUSHGATEWAY_URL ?: 'http://localhost:9091'}"
   }
   stages {
     stage('Checkout') { steps { checkout scm } }
