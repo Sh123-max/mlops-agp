@@ -96,4 +96,4 @@ def predict():
         return render_template('form.html', prediction=None, probability=None, error_messages=[f"Prediction error: {e}"], non_diabetic_warnings=[], model_name=model_name, model_metrics=model_metrics)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5002)
