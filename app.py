@@ -4,7 +4,7 @@ import os, json, joblib, numpy as np, time, socket
 from prometheus_client import Gauge, Counter, Histogram
 from prometheus_flask_exporter import PrometheusMetrics
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder="templates")
 metrics = PrometheusMetrics(app, path="/metrics")
 HOSTNAME = socket.gethostname()
 
