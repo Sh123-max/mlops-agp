@@ -1,4 +1,3 @@
-# deploy.py (fixed + robust)
 import os
 import json
 import shutil
