@@ -8,22 +8,17 @@ rule_files:
   - "/etc/prometheus/alert_rules.yml"
 
 scrape_configs:
-  # Prometheus self job (optional)
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']
 
-  # Flask app job (explicit metrics_path, replace target as required)
   - job_name: 'flask_app'
     metrics_path: /metrics
     static_configs:
-      - targets: ['host.docker.internal:5000']   # in Docker Desktop, host.docker.internal maps to host
-      # If running Prometheus in same docker-compose network as the flask container, use:
-      # - targets: ['flask_app:5000']   # (replace flask_app with your service name)
+      - targets: ['10.0.2.15:5000']    
 
-  # Pushgateway job
   - job_name: 'pushgateway'
     metrics_path: /metrics
     static_configs:
-      - targets: ['pushgateway:9091']   # replace with actual Pushgateway host if different
+      - targets: ['pushgateway:9091']
 

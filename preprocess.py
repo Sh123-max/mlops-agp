@@ -37,6 +37,7 @@ def run_preprocess():
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
+    # Save scaled numpy arrays (used by trainandevaluate)
     joblib.dump(X_train_scaled, os.path.join(OUT_DIR, "X_train.pkl"))
     joblib.dump(X_test_scaled, os.path.join(OUT_DIR, "X_test.pkl"))
     joblib.dump(y_train, os.path.join(OUT_DIR, "y_train.pkl"))
@@ -44,7 +45,12 @@ def run_preprocess():
     joblib.dump(scaler, os.path.join(OUT_DIR, "scaler.pkl"))
     joblib.dump(imputer, os.path.join(OUT_DIR, "imputer.pkl"))
 
+    # Also save the imputed (unscaled) training and test DataFrames for baseline distribution analysis
+    joblib.dump(X_train.reset_index(drop=True), os.path.join(OUT_DIR, "X_train_unscaled_df.pkl"))
+    joblib.dump(X_test.reset_index(drop=True), os.path.join(OUT_DIR, "X_test_unscaled_df.pkl"))
+
     print("Preprocessing completed and saved to", OUT_DIR)
 
 if __name__ == "__main__":
     run_preprocess()
+

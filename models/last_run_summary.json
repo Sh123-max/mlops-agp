@@ -3,94 +3,177 @@
   "results": [
     {
       "name": "LogisticRegression",
-      "run_id": "a9baffff3fa5466da4dafe96b19eec4e",
+      "run_id": "906de63469a34d3696a274aa70aaec95",
       "accuracy": 0.72,
       "precision": 0.7241379310344828,
       "recall": 0.5121951219512195,
-      "f1": 0.6,
+      "f1_score": 0.6,
       "roc_auc": 0.7908226539892518,
-      "weighted_score": 0.6152494761300623
+      "weighted_score": 0.6152494761300623,
+      "latency": 5.3000450134277346e-05,
+      "model_size": 927.0
     },
     {
       "name": "RandomForest",
-      "run_id": "07b59351c3004732885df8344db11fb3",
+      "run_id": "521c9741d9b44154b56ed945dd8f6561",
       "accuracy": 0.76,
       "precision": 0.7931034482758621,
       "recall": 0.5609756097560976,
-      "f1": 0.6571428571428571,
+      "f1_score": 0.6571428571428571,
       "roc_auc": 0.7930963207937164,
-      "weighted_score": 0.6578075376178326
+      "weighted_score": 0.6578075376178326,
+      "latency": 0.004609537124633789,
+      "model_size": 1125353.0
     },
     {
       "name": "SVM",
-      "run_id": "12ab8afb095e4d54a394bf28cffbf391",
+      "run_id": "f8c339b5c368494f92fd864745ce3842",
       "accuracy": 0.71,
       "precision": 0.7142857142857143,
       "recall": 0.4878048780487805,
-      "f1": 0.5797101449275363,
+      "f1_score": 0.5797101449275363,
       "roc_auc": 0.7713931376601901,
-      "weighted_score": 0.5945279079440968
+      "weighted_score": 0.5945279079440968,
+      "latency": 0.0006696939468383789,
+      "model_size": 22571.0
     },
     {
       "name": "DecisionTree",
-      "run_id": "8631c9fe9d224dce954a5555b09bd70c",
+      "run_id": "15df53d85ab3476d89b33b4f33209eed",
       "accuracy": 0.59,
       "precision": 0.5,
       "recall": 0.4634146341463415,
-      "f1": 0.4810126582278481,
+      "f1_score": 0.4810126582278481,
       "roc_auc": 0.5706903679206283,
-      "weighted_score": 0.4983077247110167
+      "weighted_score": 0.4983077247110167,
+      "latency": 6.186962127685547e-05,
+      "model_size": 13577.0
     },
     {
       "name": "KNN",
-      "run_id": "d602203cea1448d08a2ccd80079c257f",
+      "run_id": "a7dc0f73be5d4bc39e36a341fe30bc68",
       "accuracy": 0.73,
       "precision": 0.71875,
       "recall": 0.5609756097560976,
-      "f1": 0.6301369863013698,
+      "f1_score": 0.6301369863013698,
       "roc_auc": 0.7759404712691195,
-      "weighted_score": 0.6410569340466739
+      "weighted_score": 0.6410569340466739,
+      "latency": 0.003347325325012207,
+      "model_size": 61238.0
     },
     {
       "name": "XGBoost",
-      "run_id": "a49948a8f9da40eebe1e833e93fa7941",
+      "run_id": "09b0bee81a6749ebbc2c128d7e53d890",
       "accuracy": 0.72,
       "precision": 0.696969696969697,
       "recall": 0.5609756097560976,
-      "f1": 0.6216216216216216,
+      "f1_score": 0.6216216216216216,
       "roc_auc": 0.8015708970649029,
-      "weighted_score": 0.6420393946503911
+      "weighted_score": 0.6420393946503911,
+      "latency": 0.00028121471405029297,
+      "model_size": 154482.0
     },
     {
       "name": "GradientBoosting",
-      "run_id": "f706bed51751439ab0e1e13286fbd418",
+      "run_id": "39d8eeef994d4652a1ba26a846bfef08",
       "accuracy": 0.75,
       "precision": 0.75,
       "recall": 0.5853658536585366,
-      "f1": 0.6575342465753424,
+      "f1_score": 0.6575342465753424,
       "roc_auc": 0.8259611409673419,
-      "weighted_score": 0.6715988436294857
+      "weighted_score": 0.6715988436294857,
+      "latency": 0.00020055770874023439,
+      "model_size": 142664.0
     },
     {
       "name": "StackingEnsemble",
-      "run_id": "b5b9ea58cec447a38eb4ed7891dbd6cd",
+      "run_id": "928bb6e6dd5e46cda2d52e02e43a1e08",
       "accuracy": 0.73,
       "precision": 0.75,
       "recall": 0.5121951219512195,
-      "f1": 0.6086956521739131,
+      "f1_score": 0.6086956521739131,
       "roc_auc": 0.7920628358825961,
-      "weighted_score": 0.619899311609181
+      "weighted_score": 0.619899311609181,
+      "latency": 0.004909229278564453,
+      "model_size": 1149570.0
+    }
+  ],
+  "pareto_indices": [
+    2,
+    3,
+    4,
+    5,
+    7
+  ],
+  "pareto_models": [
+    {
+      "name": "KNN",
+      "run_id": "a7dc0f73be5d4bc39e36a341fe30bc68",
+      "accuracy": 0.73,
+      "precision": 0.71875,
+      "recall": 0.5609756097560976,
+      "f1_score": 0.6301369863013698,
+      "roc_auc": 0.7759404712691195,
+      "weighted_score": 0.6410569340466739,
+      "latency": 0.003347325325012207,
+      "model_size": 61238.0
+    },
+    {
+      "name": "XGBoost",
+      "run_id": "09b0bee81a6749ebbc2c128d7e53d890",
+      "accuracy": 0.72,
+      "precision": 0.696969696969697,
+      "recall": 0.5609756097560976,
+      "f1_score": 0.6216216216216216,
+      "roc_auc": 0.8015708970649029,
+      "weighted_score": 0.6420393946503911,
+      "latency": 0.00028121471405029297,
+      "model_size": 154482.0
+    },
+    {
+      "name": "StackingEnsemble",
+      "run_id": "928bb6e6dd5e46cda2d52e02e43a1e08",
+      "accuracy": 0.73,
+      "precision": 0.75,
+      "recall": 0.5121951219512195,
+      "f1_score": 0.6086956521739131,
+      "roc_auc": 0.7920628358825961,
+      "weighted_score": 0.619899311609181,
+      "latency": 0.004909229278564453,
+      "model_size": 1149570.0
+    },
+    {
+      "name": "SVM",
+      "run_id": "f8c339b5c368494f92fd864745ce3842",
+      "accuracy": 0.71,
+      "precision": 0.7142857142857143,
+      "recall": 0.4878048780487805,
+      "f1_score": 0.5797101449275363,
+      "roc_auc": 0.7713931376601901,
+      "weighted_score": 0.5945279079440968,
+      "latency": 0.0006696939468383789,
+      "model_size": 22571.0
+    },
+    {
+      "name": "DecisionTree",
+      "run_id": "15df53d85ab3476d89b33b4f33209eed",
+      "accuracy": 0.59,
+      "precision": 0.5,
+      "recall": 0.4634146341463415,
+      "f1_score": 0.4810126582278481,
+      "roc_auc": 0.5706903679206283,
+      "weighted_score": 0.4983077247110167,
+      "latency": 6.186962127685547e-05,
+      "model_size": 13577.0
     }
   ],
   "best": {
-    "score": 0.6715988436294857,
-    "name": "GradientBoosting",
-    "run_id": "f706bed51751439ab0e1e13286fbd418",
+    "score": 0.6410569340466739,
+    "name": "KNN",
+    "run_id": "a7dc0f73be5d4bc39e36a341fe30bc68",
     "registry": {
-      "name": "diabetes_GradientBoosting",
-      "version": "7"
+      "name": "diabetes_KNN",
+      "version": "1"
     }
-  },
-  "error": null,
-  "traceback": null
+  }
 }
