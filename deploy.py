@@ -4,6 +4,7 @@ import json
 import shutil
 import mlflow
 from mlflow.tracking import MlflowClient
+import sys
 
 MODEL_DIR = os.getenv("MODEL_DIR", "models")
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
@@ -54,12 +55,26 @@ def resolve_artifact_uri_from_model_version(registry_name, version):
 def deploy_best(project, stage="Staging"):
     summary_path = os.path.join(MODEL_DIR, "last_run_summary.json")
     if not os.path.exists(summary_path):
-        raise RuntimeError("No last_run_summary.json found. Run training first.")
-    summary = json.load(open(summary_path))
+        print(f"[deploy] Summary file not found at {summary_path}. Cannot find best model.")
+        print("Please ensure training produced a valid models/last_run_summary.json (check MLflow connection).")
+        sys.exit(1)
+
+    try:
+        summary = json.load(open(summary_path))
+    except Exception as e:
+        print(f"[deploy] Failed to read summary file {summary_path}: {e}")
+        sys.exit(1)
+
     best = summary.get("best", {})
     best_name = best.get("name")
     if not best_name:
-        raise RuntimeError("No best model found in summary.")
+        print("[deploy] Summary exists but no best model present.")
+        print("Summary contents:")
+        print(json.dumps(summary, indent=2))
+        # If you want to fallback to a local model, keep the fallback logic below.
+        # For now, exit with clear diagnostic so CI logs show the summary contents.
+        sys.exit(1)
+
     registry_name = f"{project}_{best_name}"
 
     # try to find version in stage first, else any versions
@@ -86,7 +101,7 @@ def deploy_best(project, stage="Staging"):
     if versions:
         selected = versions[0]
         metadata["version"] = selected.version
-        print(f"[INFO] Selected model version: name={selected.name} version={selected.version} stage={selected.current_stage}")
+        print(f"[INFO] Selected model version: name={selected.name} version={selected.version} stage={getattr(selected, 'current_stage', None)}")
         # Try to use selected.source if available
         artifact_uri = getattr(selected, "source", None)
         metadata["source"] = artifact_uri
@@ -143,7 +158,10 @@ def deploy_best(project, stage="Staging"):
         print("[OK] Deployment metadata written to models/model_metadata.json")
         return
 
-    raise RuntimeError(f"No model could be downloaded or found locally for registry_name={registry_name}")
+    print(f"[ERROR] No model could be downloaded or found locally for registry_name={registry_name}")
+    print("Summary contents for debugging:")
+    print(json.dumps(summary, indent=2))
+    sys.exit(1)
 
 if __name__ == "__main__":
     import argparse
@@ -152,3 +170,4 @@ if __name__ == "__main__":
     parser.add_argument("--stage", default="Staging")
     args = parser.parse_args()
     deploy_best(args.project, args.stage)
+

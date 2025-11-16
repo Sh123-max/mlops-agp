@@ -13,47 +13,93 @@ pipeline {
     PUSHGATEWAY_URL = "${env.PUSHGATEWAY_URL ?: 'http://localhost:9091'}"
   }
   stages {
-    stage('Checkout') { steps { checkout scm } }
+    stage('Checkout') {
+      steps { checkout scm }
+    }
 
     stage('Build Docker image') {
-      steps { sh 'docker build -t mlops-agp:${BUILD_NUMBER} .' }
+      steps {
+        // build tagged with BUILD_NUMBER for CI reproducibility
+        sh 'docker build -t mlops-agp:${BUILD_NUMBER} .'
+      }
     }
 
     stage('Preprocess') {
       steps {
-        sh "docker run --rm -v ${pwd()}:/app -w /app -e DATA_DIR=/app/data -e OMP_NUM_THREADS=${env.OMP_NUM_THREADS} -e MKL_NUM_THREADS=${env.MKL_NUM_THREADS} -e OPENBLAS_NUM_THREADS=${env.OPENBLAS_NUM_THREADS} mlops-agp:${BUILD_NUMBER} python preprocess.py"
+        // Preprocess usually doesn't need host-network; leave network isolated
+        sh """
+          docker run --rm \
+            -v ${pwd()}:/app -w /app \
+            -e DATA_DIR=/app/data \
+            -e OMP_NUM_THREADS=${env.OMP_NUM_THREADS} \
+            -e MKL_NUM_THREADS=${env.MKL_NUM_THREADS} \
+            -e OPENBLAS_NUM_THREADS=${env.OPENBLAS_NUM_THREADS} \
+            mlops-agp:${BUILD_NUMBER} python preprocess.py
+        """
       }
     }
 
     stage('Train & Evaluate') {
       steps {
-        sh "docker run --rm -v ${pwd()}:/app -w /app -e MLFLOW_TRACKING_URI=${env.MLFLOW_TRACKING_URI} -e PUSHGATEWAY_URL=${env.PUSHGATEWAY_URL} -e NUM_WORKER_THREADS=${env.NUM_WORKER_THREADS} -e OMP_NUM_THREADS=${env.OMP_NUM_THREADS} -e MKL_NUM_THREADS=${env.MKL_NUM_THREADS} -e OPENBLAS_NUM_THREADS=${env.OPENBLAS_NUM_THREADS} mlops-agp:${BUILD_NUMBER} python trainandevaluate.py"
+        // Use host networking so container can reach MLflow at localhost:5001 on the Jenkins host
+        sh """
+          docker run --rm \
+            --network host \
+            -v ${pwd()}:/app -w /app \
+            -e MLFLOW_TRACKING_URI=http://localhost:5001 \
+            -e PUSHGATEWAY_URL=${env.PUSHGATEWAY_URL} \
+            -e NUM_WORKER_THREADS=${env.NUM_WORKER_THREADS} \
+            -e OMP_NUM_THREADS=${env.OMP_NUM_THREADS} \
+            -e MKL_NUM_THREADS=${env.MKL_NUM_THREADS} \
+            -e OPENBLAS_NUM_THREADS=${env.OPENBLAS_NUM_THREADS} \
+            mlops-agp:${BUILD_NUMBER} python trainandevaluate.py
+        """
+        // always try to archive summary if created
         archiveArtifacts artifacts: 'models/last_run_summary.json', onlyIfSuccessful: true
       }
     }
 
     stage('Validate') {
       steps {
-        // put your validation script here (example placeholder)
+        // placeholder for any model validation step
         sh "echo 'Validation placeholder - implement scripts/validate_model.py if needed'"
       }
     }
 
     stage('Deploy Staging') {
       steps {
-        sh "docker run --rm -v ${pwd()}:/app -w /app -e MLFLOW_TRACKING_URI=${env.MLFLOW_TRACKING_URI} mlops-agp:${BUILD_NUMBER} python deploy.py --project ${params.PROJECT_NAME} --stage Staging"
+        // Use host networking so deploy can contact MLflow / registry on host
+        sh """
+          docker run --rm \
+            --network host \
+            -v ${pwd()}:/app -w /app \
+            -e MLFLOW_TRACKING_URI=http://localhost:5001 \
+            mlops-agp:${BUILD_NUMBER} python deploy.py --project ${params.PROJECT_NAME} --stage Staging
+        """
       }
     }
 
     stage('Promote to Production') {
       when { expression { return params.AUTO_DEPLOY } }
       steps {
-        sh "docker run --rm -v ${pwd()}:/app -w /app -e MLFLOW_TRACKING_URI=${env.MLFLOW_TRACKING_URI} mlops-agp:${BUILD_NUMBER} python deploy.py --project ${params.PROJECT_NAME} --stage Production"
+        sh """
+          docker run --rm \
+            --network host \
+            -v ${pwd()}:/app -w /app \
+            -e MLFLOW_TRACKING_URI=http://localhost:5001 \
+            mlops-agp:${BUILD_NUMBER} python deploy.py --project ${params.PROJECT_NAME} --stage Production
+        """
       }
     }
   }
+
   post {
-    success { echo 'Pipeline finished successfully' }
-    failure { echo 'Pipeline failed' }
+    success {
+      echo 'Pipeline finished successfully'
+    }
+    failure {
+      echo 'Pipeline failed'
+    }
   }
 }
+

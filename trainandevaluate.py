@@ -10,6 +10,7 @@ import mlflow
 import mlflow.sklearn
 import requests
 import numpy as np
+import sys
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, StackingClassifier
@@ -46,11 +47,27 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 print("MLflow tracking URI:", mlflow.get_tracking_uri())
 print("NUM_WORKER_THREADS:", NUM_WORKER_THREADS)
 
-# Load data
-X_train = joblib.load(os.path.join(DATA_DIR, "X_train.pkl"))
-X_test = joblib.load(os.path.join(DATA_DIR, "X_test.pkl"))
-y_train = joblib.load(os.path.join(DATA_DIR, "y_train.pkl"))
-y_test = joblib.load(os.path.join(DATA_DIR, "y_test.pkl"))
+# Load data (these must exist from preprocess stage)
+try:
+    X_train = joblib.load(os.path.join(DATA_DIR, "X_train.pkl"))
+    X_test = joblib.load(os.path.join(DATA_DIR, "X_test.pkl"))
+    y_train = joblib.load(os.path.join(DATA_DIR, "y_train.pkl"))
+    y_test = joblib.load(os.path.join(DATA_DIR, "y_test.pkl"))
+except Exception as e:
+    print("Failed to load preprocessed data from", DATA_DIR, ":", e)
+    traceback.print_exc()
+    # write a summary and exit with error
+    summary = {
+        "project": PROJECT_NAME,
+        "results": [],
+        "best": {"score": -1, "name": None, "run_id": None, "registry": None},
+        "error": f"Failed to load preprocessed data: {str(e)}",
+        "traceback": traceback.format_exc()
+    }
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    with open(MODEL_DIR / "last_run_summary.json", "w") as fh:
+        json.dump(summary, fh, indent=2)
+    sys.exit(1)
 
 # Define models (set n_jobs=1 to avoid nested threading)
 models = {
@@ -81,10 +98,67 @@ def safe_roc_auc(y_true, y_score):
 
 def train_and_log(name, model):
     run_name = f"{PROJECT_NAME}__{name}__{int(time.time())}"
-    with mlflow.start_run(run_name=run_name) as run:
-        run_id = run.info.run_id
+    try:
+        with mlflow.start_run(run_name=run_name) as run:
+            run_id = run.info.run_id
+            try:
+                print(f"[{name}] Training (run_id={run_id})")
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                if hasattr(model, "predict_proba"):
+                    y_proba = model.predict_proba(X_test)[:,1]
+                elif hasattr(model, "decision_function"):
+                    from scipy.special import expit
+                    y_proba = expit(model.decision_function(X_test))
+                else:
+                    y_proba = np.zeros_like(y_pred, dtype=float)
+
+                acc = accuracy_score(y_test, y_pred)
+                prec = precision_score(y_test, y_pred, zero_division=0)
+                rec = recall_score(y_test, y_pred, zero_division=0)
+                f1 = f1_score(y_test, y_pred, zero_division=0)
+                roc = safe_roc_auc(y_test, y_proba)
+
+                weighted = (weights['Accuracy']*acc + weights['Precision']*prec + weights['Recall']*rec + weights['F1-Score']*f1 + weights['ROC-AUC']*roc)
+
+                mlflow.log_param("model_name", name)
+                mlflow.log_metric("accuracy", float(acc))
+                mlflow.log_metric("precision", float(prec))
+                mlflow.log_metric("recall", float(rec))
+                mlflow.log_metric("f1_score", float(f1))
+                mlflow.log_metric("roc_auc", float(roc))
+                mlflow.log_metric("weighted_score", float(weighted))
+                mlflow.set_tag("project", PROJECT_NAME)
+                mlflow.set_tag("model_name", name)
+
+                try:
+                    mlflow.sklearn.log_model(model, artifact_path="model")
+                except Exception as e:
+                    print("mlflow log model failed:", e)
+
+                print(f"[{name}] done: weighted_score={weighted:.4f}")
+                return {
+                    "name": name,
+                    "run_id": run_id,
+                    "accuracy": acc,
+                    "precision": prec,
+                    "recall": rec,
+                    "f1": f1,
+                    "roc_auc": roc,
+                    "weighted_score": weighted
+                }
+            except Exception as e:
+                print(f"[{name}] failed:", e)
+                traceback.print_exc()
+                mlflow.set_tag("training_status", "failed")
+                return {"name": name, "error": str(e)}
+    except Exception as e:
+        # If mlflow.start_run fails (e.g., connection refused), handle gracefully:
+        print(f"[{name}] could not start MLflow run: {e}")
+        traceback.print_exc()
+        # Attempt local training without MLflow logging to still produce metrics
         try:
-            print(f"[{name}] Training (run_id={run_id})")
+            print(f"[{name}] Training locally without MLflow logging")
             model.fit(X_train, y_train)
             y_pred = model.predict(X_test)
             if hasattr(model, "predict_proba"):
@@ -103,75 +177,85 @@ def train_and_log(name, model):
 
             weighted = (weights['Accuracy']*acc + weights['Precision']*prec + weights['Recall']*rec + weights['F1-Score']*f1 + weights['ROC-AUC']*roc)
 
-            mlflow.log_param("model_name", name)
-            mlflow.log_metric("accuracy", float(acc))
-            mlflow.log_metric("precision", float(prec))
-            mlflow.log_metric("recall", float(rec))
-            mlflow.log_metric("f1_score", float(f1))
-            mlflow.log_metric("roc_auc", float(roc))
-            mlflow.log_metric("weighted_score", float(weighted))
-            mlflow.set_tag("project", PROJECT_NAME)
-            mlflow.set_tag("model_name", name)
-
-            try:
-                mlflow.sklearn.log_model(model, artifact_path="model")
-            except Exception as e:
-                print("mlflow log model failed:", e)
-
-            print(f"[{name}] done: weighted_score={weighted:.4f}")
+            print(f"[{name}] done (no-mlflow): weighted_score={weighted:.4f}")
             return {
                 "name": name,
-                "run_id": run_id,
+                "run_id": None,
                 "accuracy": acc,
                 "precision": prec,
                 "recall": rec,
                 "f1": f1,
                 "roc_auc": roc,
-                "weighted_score": weighted
+                "weighted_score": weighted,
+                "mlflow_error": str(e)
             }
-        except Exception as e:
-            print(f"[{name}] failed:", e)
+        except Exception as e2:
+            print(f"[{name}] failed during local training fallback:", e2)
             traceback.print_exc()
-            mlflow.set_tag("training_status", "failed")
-            return {"name": name, "error": str(e)}
+            return {"name": name, "error": f"mlflow_start_failed:{e}, local_train_failed:{e2}"}
 
 # Parallel training using threads (threads share memory)
 best = {"score": -1, "name": None, "run_id": None, "registry": None}
 results = []
-
-with ThreadPoolExecutor(max_workers=NUM_WORKER_THREADS) as ex:
-    futures = {ex.submit(train_and_log, n, m): n for n, m in models.items()}
-    for fut in as_completed(futures):
-        name = futures[fut]
-        try:
-            res = fut.result()
-            results.append(res)
-            if "error" not in res:
-                score = float(res.get("weighted_score", -1))
-                if score > best["score"]:
-                    # attempt register
-                    run_id = res["run_id"]
-                    registry_name = f"{PROJECT_NAME}_{res['name']}"
-                    try:
-                        registered = mlflow.register_model(f"runs:/{run_id}/model", registry_name)
-                        best = {"score": score, "name": res['name'], "run_id": run_id, "registry": {"name": registry_name, "version": registered.version}}
-                    except Exception as e:
-                        print("Register failed:", e)
-                        best = {"score": score, "name": res['name'], "run_id": run_id, "registry": None}
-        except Exception as e:
-            print("Future exception for", name, e)
-
 summary = {
     "project": PROJECT_NAME,
-    "results": results,
-    "best": best
+    "results": [],
+    "best": best,
+    "error": None,
+    "traceback": None
 }
-with open(MODEL_DIR / "last_run_summary.json", "w") as fh:
-    json.dump(summary, fh, indent=2)
+
+try:
+    with ThreadPoolExecutor(max_workers=NUM_WORKER_THREADS) as ex:
+        futures = {ex.submit(train_and_log, n, m): n for n, m in models.items()}
+        for fut in as_completed(futures):
+            name = futures[fut]
+            try:
+                res = fut.result()
+                results.append(res)
+                # store per-model result
+                print(f"[RESULT] {res}")
+                if "error" not in res:
+                    score = float(res.get("weighted_score", -1))
+                    # If run_id present we prefer that; if no run_id (MLflow down), we still compare scores
+                    if score > best["score"]:
+                        run_id = res.get("run_id")
+                        registry_name = f"{PROJECT_NAME}_{res['name']}"
+                        # attempt register only if run_id exists
+                        if run_id:
+                            try:
+                                registered = mlflow.register_model(f"runs:/{run_id}/model", registry_name)
+                                best = {"score": score, "name": res['name'], "run_id": run_id, "registry": {"name": registry_name, "version": registered.version}}
+                            except Exception as e:
+                                print("Register failed:", e)
+                                best = {"score": score, "name": res['name'], "run_id": run_id, "registry": None}
+                        else:
+                            # MLflow is not available; select best locally (no registry)
+                            best = {"score": score, "name": res['name'], "run_id": None, "registry": None}
+            except Exception as e:
+                print("Future exception for", name, e)
+                traceback.print_exc()
+except Exception as e:
+    print("Unhandled exception in training loop:", e)
+    summary["error"] = str(e)
+    summary["traceback"] = traceback.format_exc()
+
+# finalize results and write summary (always write)
+summary["results"] = results
+summary["best"] = best
+
+try:
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    with open(MODEL_DIR / "last_run_summary.json", "w") as fh:
+        json.dump(summary, fh, indent=2)
+    print("Wrote summary to", MODEL_DIR / "last_run_summary.json")
+except Exception as e:
+    print("Failed to write summary file:", e)
+    traceback.print_exc()
 
 print("Training complete. Best:", best)
 
-# Push metric to pushgateway
+# Push metric to pushgateway (if available and best has a name)
 if PUSHGATEWAY_URL and best.get("name"):
     try:
         payload = f'model_weighted_score{{project="{PROJECT_NAME}",model="{best["name"]}"}} {best["score"]}\n'
@@ -180,3 +264,4 @@ if PUSHGATEWAY_URL and best.get("name"):
         print("Pushgateway status:", resp.status_code)
     except Exception as e:
         print("Push to pushgateway failed:", e)
+
