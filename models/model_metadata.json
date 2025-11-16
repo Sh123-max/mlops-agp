@@ -1,0 +1,7 @@
+{
+  "model_name": "GradientBoosting",
+  "registry_name": "diabetes_GradientBoosting",
+  "version": "5",
+  "source": "/mlflow/artifacts/0/1a9e0eb60539422faadab6a3b7cbac45/artifacts/model",
+  "deployed_path": "models/deployed_model/best_model.pkl"
+}

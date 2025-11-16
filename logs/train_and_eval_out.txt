@@ -1,0 +1,70 @@
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/mlflow/utils/requirements_utils.py:12: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+Registered model 'diabetes_LogisticRegression' already exists. Creating a new version of this model...
+2025/11/16 01:28:14 INFO mlflow.tracking._model_registry.client: Waiting up to 300 seconds for model version to finish creation. Model name: diabetes_LogisticRegression, version 3
+Created version '3' of model 'diabetes_LogisticRegression'.
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:15: UserWarning: Distutils was imported before Setuptools, but importing Setuptools also replaces the `distutils` module in `sys.modules`. This may lead to undesirable behaviors or errors. To avoid these issues, avoid using distutils directly, ensure that setuptools is installed in the traditional way (e.g. not an editable install), and/or make sure that setuptools is always imported before distutils.
+  warnings.warn(
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:30: UserWarning: Setuptools is replacing distutils. Support for replacing an already imported distutils is deprecated. In the future, this condition will fail. Register concerns at https://github.com/pypa/setuptools/issues/new?template=distutils-deprecation.yml
+  warnings.warn(
+Registered model 'diabetes_RandomForest' already exists. Creating a new version of this model...
+2025/11/16 01:28:17 INFO mlflow.tracking._model_registry.client: Waiting up to 300 seconds for model version to finish creation. Model name: diabetes_RandomForest, version 3
+Created version '3' of model 'diabetes_RandomForest'.
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:15: UserWarning: Distutils was imported before Setuptools, but importing Setuptools also replaces the `distutils` module in `sys.modules`. This may lead to undesirable behaviors or errors. To avoid these issues, avoid using distutils directly, ensure that setuptools is installed in the traditional way (e.g. not an editable install), and/or make sure that setuptools is always imported before distutils.
+  warnings.warn(
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:30: UserWarning: Setuptools is replacing distutils. Support for replacing an already imported distutils is deprecated. In the future, this condition will fail. Register concerns at https://github.com/pypa/setuptools/issues/new?template=distutils-deprecation.yml
+  warnings.warn(
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:15: UserWarning: Distutils was imported before Setuptools, but importing Setuptools also replaces the `distutils` module in `sys.modules`. This may lead to undesirable behaviors or errors. To avoid these issues, avoid using distutils directly, ensure that setuptools is installed in the traditional way (e.g. not an editable install), and/or make sure that setuptools is always imported before distutils.
+  warnings.warn(
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:30: UserWarning: Setuptools is replacing distutils. Support for replacing an already imported distutils is deprecated. In the future, this condition will fail. Register concerns at https://github.com/pypa/setuptools/issues/new?template=distutils-deprecation.yml
+  warnings.warn(
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:15: UserWarning: Distutils was imported before Setuptools, but importing Setuptools also replaces the `distutils` module in `sys.modules`. This may lead to undesirable behaviors or errors. To avoid these issues, avoid using distutils directly, ensure that setuptools is installed in the traditional way (e.g. not an editable install), and/or make sure that setuptools is always imported before distutils.
+  warnings.warn(
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:30: UserWarning: Setuptools is replacing distutils. Support for replacing an already imported distutils is deprecated. In the future, this condition will fail. Register concerns at https://github.com/pypa/setuptools/issues/new?template=distutils-deprecation.yml
+  warnings.warn(
+[01:28:24] WARNING: /home/conda/feedstock_root/build_artifacts/xgboost-split_1762060489429/work/src/learner.cc:790: 
+Parameters: { "use_label_encoder" } are not used.
+
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:15: UserWarning: Distutils was imported before Setuptools, but importing Setuptools also replaces the `distutils` module in `sys.modules`. This may lead to undesirable behaviors or errors. To avoid these issues, avoid using distutils directly, ensure that setuptools is installed in the traditional way (e.g. not an editable install), and/or make sure that setuptools is always imported before distutils.
+  warnings.warn(
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:30: UserWarning: Setuptools is replacing distutils. Support for replacing an already imported distutils is deprecated. In the future, this condition will fail. Register concerns at https://github.com/pypa/setuptools/issues/new?template=distutils-deprecation.yml
+  warnings.warn(
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:15: UserWarning: Distutils was imported before Setuptools, but importing Setuptools also replaces the `distutils` module in `sys.modules`. This may lead to undesirable behaviors or errors. To avoid these issues, avoid using distutils directly, ensure that setuptools is installed in the traditional way (e.g. not an editable install), and/or make sure that setuptools is always imported before distutils.
+  warnings.warn(
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:30: UserWarning: Setuptools is replacing distutils. Support for replacing an already imported distutils is deprecated. In the future, this condition will fail. Register concerns at https://github.com/pypa/setuptools/issues/new?template=distutils-deprecation.yml
+  warnings.warn(
+Registered model 'diabetes_GradientBoosting' already exists. Creating a new version of this model...
+2025/11/16 01:28:29 INFO mlflow.tracking._model_registry.client: Waiting up to 300 seconds for model version to finish creation. Model name: diabetes_GradientBoosting, version 5
+Created version '5' of model 'diabetes_GradientBoosting'.
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:15: UserWarning: Distutils was imported before Setuptools, but importing Setuptools also replaces the `distutils` module in `sys.modules`. This may lead to undesirable behaviors or errors. To avoid these issues, avoid using distutils directly, ensure that setuptools is installed in the traditional way (e.g. not an editable install), and/or make sure that setuptools is always imported before distutils.
+  warnings.warn(
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/_distutils_hack/__init__.py:30: UserWarning: Setuptools is replacing distutils. Support for replacing an already imported distutils is deprecated. In the future, this condition will fail. Register concerns at https://github.com/pypa/setuptools/issues/new?template=distutils-deprecation.yml
+  warnings.warn(
+MLflow tracking URI: http://localhost:5001
+NUM_WORKER_THREADS: 1
+[LogisticRegression] Training (run_id=d4e8a8e369f54e87b4ea8e15436c1a0a)
+mlflow log model failed: [Errno 13] Permission denied: '/mlflow'
+[LogisticRegression] done: weighted_score=0.6778
+[RandomForest] Training (run_id=da100aa21bfe4fa88a2b4f96ff9e90e2)
+mlflow log model failed: [Errno 13] Permission denied: '/mlflow'
+[RandomForest] done: weighted_score=0.6969
+[SVM] Training (run_id=9152e5419bcd4372be20cdf66df34ff2)
+mlflow log model failed: [Errno 13] Permission denied: '/mlflow'
+[SVM] done: weighted_score=0.6364
+[DecisionTree] Training (run_id=1b96cf6e298444c1810e3287a26e8a16)
+mlflow log model failed: [Errno 13] Permission denied: '/mlflow'
+[DecisionTree] done: weighted_score=0.6301
+[KNN] Training (run_id=0c4a60a02b87426a8c32560674174f6d)
+mlflow log model failed: [Errno 13] Permission denied: '/mlflow'
+[KNN] done: weighted_score=0.6315
+[XGBoost] Training (run_id=f352932f4e254d7993833d7f4947782e)
+mlflow log model failed: [Errno 13] Permission denied: '/mlflow'
+[XGBoost] done: weighted_score=0.6853
+[GradientBoosting] Training (run_id=1a9e0eb60539422faadab6a3b7cbac45)
+mlflow log model failed: [Errno 13] Permission denied: '/mlflow'
+[GradientBoosting] done: weighted_score=0.7288
+[StackingEnsemble] Training (run_id=ad45d65054a04ab68cea89af61b3d41d)
+mlflow log model failed: [Errno 13] Permission denied: '/mlflow'
+[StackingEnsemble] done: weighted_score=0.6752
+Training complete. Best: {'score': 0.728776161349351, 'name': 'GradientBoosting', 'run_id': '1a9e0eb60539422faadab6a3b7cbac45', 'registry': {'name': 'diabetes_GradientBoosting', 'version': '5'}}
+Pushgateway status: 200

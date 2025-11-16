@@ -1,0 +1,5 @@
+[INFO] Best model from summary: GradientBoosting
+[INFO] Fitting GradientBoosting on full dataset ...
+[OK] Saved model: models/best_model.pkl
+[OK] Copied to deployed_model: models/deployed_model/best_model.pkl
+[OK] Wrote models/model_metadata.json

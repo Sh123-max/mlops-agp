@@ -1,0 +1,12 @@
+/home/shreekar/miniconda3/envs/mlops-agp/lib/python3.10/site-packages/mlflow/utils/requirements_utils.py:12: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+[INFO] Selected model version: name=diabetes_GradientBoosting version=5 stage=None
+[DEBUG] selected.source: /mlflow/artifacts/0/1a9e0eb60539422faadab6a3b7cbac45/artifacts/model
+[INFO] Downloading artifact_uri=/mlflow/artifacts/0/1a9e0eb60539422faadab6a3b7cbac45/artifacts/model to dst=models/deployed_model
+[WARN] Failed to download artifacts from resolved source: The following failures occurred while downloading one or more artifacts from /mlflow/artifacts/0/1a9e0eb60539422faadab6a3b7cbac45/artifacts: {'model': "FileNotFoundError(2, 'No such file or directory')"}
+Traceback (most recent call last):
+  File "/home/shreekar/mlops-agp/./deploy.py", line 154, in <module>
+    deploy_best(args.project, args.stage)
+  File "/home/shreekar/mlops-agp/./deploy.py", line 146, in deploy_best
+    raise RuntimeError(f"No model could be downloaded or found locally for registry_name={registry_name}")
+RuntimeError: No model could be downloaded or found locally for registry_name=diabetes_GradientBoosting

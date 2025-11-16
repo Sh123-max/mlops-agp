@@ -1,0 +1,94 @@
+{
+  "project": "diabetes",
+  "results": [
+    {
+      "name": "LogisticRegression",
+      "run_id": "880aca64137b403ab5cb15451f97146a",
+      "accuracy": 0.72,
+      "precision": 0.7241379310344828,
+      "recall": 0.5121951219512195,
+      "f1": 0.6,
+      "roc_auc": 0.7908226539892518,
+      "weighted_score": 0.6152494761300623
+    },
+    {
+      "name": "RandomForest",
+      "run_id": "7c48dd789d0b440eaa7a132a757269c2",
+      "accuracy": 0.76,
+      "precision": 0.7931034482758621,
+      "recall": 0.5609756097560976,
+      "f1": 0.6571428571428571,
+      "roc_auc": 0.7930963207937164,
+      "weighted_score": 0.6578075376178326
+    },
+    {
+      "name": "SVM",
+      "run_id": "053a1e3831374aebbc1499cf580418ad",
+      "accuracy": 0.71,
+      "precision": 0.7142857142857143,
+      "recall": 0.4878048780487805,
+      "f1": 0.5797101449275363,
+      "roc_auc": 0.7713931376601901,
+      "weighted_score": 0.5945279079440968
+    },
+    {
+      "name": "DecisionTree",
+      "run_id": "c08e5440e0414adc8269d453e7a3a7d1",
+      "accuracy": 0.59,
+      "precision": 0.5,
+      "recall": 0.4634146341463415,
+      "f1": 0.4810126582278481,
+      "roc_auc": 0.5706903679206283,
+      "weighted_score": 0.4983077247110167
+    },
+    {
+      "name": "KNN",
+      "run_id": "ef233e3245824d4bb8ca67e0e71c1b0e",
+      "accuracy": 0.73,
+      "precision": 0.71875,
+      "recall": 0.5609756097560976,
+      "f1": 0.6301369863013698,
+      "roc_auc": 0.7759404712691195,
+      "weighted_score": 0.6410569340466739
+    },
+    {
+      "name": "XGBoost",
+      "run_id": "bca1843da40440fea4a04aa6e8a31b01",
+      "accuracy": 0.72,
+      "precision": 0.696969696969697,
+      "recall": 0.5609756097560976,
+      "f1": 0.6216216216216216,
+      "roc_auc": 0.8015708970649029,
+      "weighted_score": 0.6420393946503911
+    },
+    {
+      "name": "GradientBoosting",
+      "run_id": "52cc7f885d164caabb21e19058399e22",
+      "accuracy": 0.75,
+      "precision": 0.75,
+      "recall": 0.5853658536585366,
+      "f1": 0.6575342465753424,
+      "roc_auc": 0.8259611409673419,
+      "weighted_score": 0.6715988436294857
+    },
+    {
+      "name": "StackingEnsemble",
+      "run_id": "38e2a12826ef4666b763646daefe4b0f",
+      "accuracy": 0.73,
+      "precision": 0.75,
+      "recall": 0.5121951219512195,
+      "f1": 0.6086956521739131,
+      "roc_auc": 0.7916494419181479,
+      "weighted_score": 0.6198166328162913
+    }
+  ],
+  "best": {
+    "score": 0.6715988436294857,
+    "name": "GradientBoosting",
+    "run_id": "52cc7f885d164caabb21e19058399e22",
+    "registry": {
+      "name": "diabetes_GradientBoosting",
+      "version": "6"
+    }
+  }
+}

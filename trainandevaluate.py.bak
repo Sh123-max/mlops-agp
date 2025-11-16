@@ -59,7 +59,7 @@ models = {
     'SVM': SVC(probability=True),
     'DecisionTree': DecisionTreeClassifier(random_state=42),
     'KNN': KNeighborsClassifier(),
-    'XGBoost': XGBClassifier(use_label_encoder=False, eval_metric='logloss', n_jobs=max(1, NUM_WORKER_THREADS), verbosity=1, random_state=42),
+    'XGBoost': XGBClassifier(use_label_encoder=False, eval_metric='logloss', nthread=NUM_WORKER_THREADS, verbosity=1, random_state=42),
     'GradientBoosting': GradientBoostingClassifier(random_state=42)
 }
 
