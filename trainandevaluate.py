@@ -1,4 +1,12 @@
 # trainandevaluate.py
+"""
+Train multiple models, evaluate, perform Pareto-style selection (non-dominated),
+register best model with MLflow, write metadata, and push summary metrics to Pushgateway.
+
+Expected environment variables (with defaults):
+PROJECT_NAME, MLFLOW_TRACKING_URI, PUSHGATEWAY_URL, DATA_DIR, MODEL_DIR, NUM_WORKER_THREADS
+"""
+
 import os
 import json
 import time
@@ -11,18 +19,16 @@ import mlflow.sklearn
 import requests
 import numpy as np
 import tempfile
-import shutil
-import time as pytime
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, StackingClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
 from xgboost import XGBClassifier
 
-# Config from env
+# Config
 PROJECT_NAME = os.getenv("PROJECT_NAME", "diabetes")
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL", "http://localhost:9091")
@@ -30,41 +36,48 @@ DATA_DIR = os.getenv("DATA_DIR", "data")
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "models"))
 MODEL_DIR.mkdir(exist_ok=True)
 
-# Resource controls
+# Resource/threading
 try:
     NUM_WORKER_THREADS = int(os.getenv("NUM_WORKER_THREADS", str(max(1, os.cpu_count()//2))))
 except Exception:
     NUM_WORKER_THREADS = max(1, os.cpu_count()//2)
-NUM_WORKER_THREADS = min(NUM_WORKER_THREADS, 3)  # conservative cap for 8GB machine
+NUM_WORKER_THREADS = min(NUM_WORKER_THREADS, 3)
 
 os.environ.setdefault("OMP_NUM_THREADS", os.getenv("OMP_NUM_THREADS", "2"))
 os.environ.setdefault("MKL_NUM_THREADS", os.getenv("MKL_NUM_THREADS", "2"))
 os.environ.setdefault("OPENBLAS_NUM_THREADS", os.getenv("OPENBLAS_NUM_THREADS", "2"))
 
-# Metric weights (healthcare priority) -- used as tie-breaker
+# Healthcare weights (used as tie-breaker)
 weights = {'Accuracy':0.05,'Precision':0.05,'Recall':0.4,'F1-Score':0.3,'ROC-AUC':0.2}
 
-# MLflow setup
+# MLflow
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 print("MLflow tracking URI:", mlflow.get_tracking_uri())
 print("NUM_WORKER_THREADS:", NUM_WORKER_THREADS)
 
-# Load data
+# Load preprocessed data
 X_train = joblib.load(os.path.join(DATA_DIR, "X_train.pkl"))
 X_test = joblib.load(os.path.join(DATA_DIR, "X_test.pkl"))
 y_train = joblib.load(os.path.join(DATA_DIR, "y_train.pkl"))
 y_test = joblib.load(os.path.join(DATA_DIR, "y_test.pkl"))
 
-# For baseline unscaled distributions we will reconstruct using scaler if available
-scaler_path = os.path.join(DATA_DIR, "scaler.pkl")
+# Try to load scaler/unscaled data for baseline distributions
 scaler = None
-if os.path.exists(scaler_path):
-    try:
-        scaler = joblib.load(scaler_path)
-    except Exception as e:
-        print("Failed to load scaler:", e)
+try:
+    scaler = joblib.load(os.path.join(DATA_DIR, "scaler.pkl"))
+except Exception:
+    scaler = None
 
-# Define models (set n_jobs=1 to avoid nested threading)
+# If preprocess saved unscaled dfs (helpful for baseline), load them if present
+X_train_unscaled_df = None
+try:
+    path_unscaled = os.path.join(DATA_DIR, "X_train_unscaled_df.pkl")
+    if os.path.exists(path_unscaled):
+        X_train_unscaled_df = joblib.load(path_unscaled)
+except Exception:
+    X_train_unscaled_df = None
+
+# Models dict
 models = {
     'LogisticRegression': LogisticRegression(max_iter=2000),
     'RandomForest': RandomForestClassifier(random_state=42, n_jobs=1),
@@ -91,18 +104,16 @@ def safe_roc_auc(y_true, y_score):
     except Exception:
         return 0.0
 
-def measure_latency(model, X_sample, n_runs=20):
-    # measure average time per predict call
+def measure_latency(model, X_sample, n_runs=10):
     try:
         # warmup
-        for _ in range(3):
+        for _ in range(2):
             _ = model.predict(X_sample)
-        t0 = pytime.time()
+        t0 = time.time()
         for _ in range(n_runs):
             _ = model.predict(X_sample)
-        t1 = pytime.time()
-        avg = (t1 - t0) / n_runs
-        return float(avg)
+        t1 = time.time()
+        return float((t1 - t0) / n_runs)
     except Exception:
         return float(1e6)
 
@@ -115,23 +126,10 @@ def measure_model_size(model):
     except Exception:
         return float(1e12)
 
-def is_better_by_healthcare_priority(a, b):
-    # a and b are dicts with metrics; prefer higher recall, then f1, then roc_auc
-    for k in ("recall", "f1", "roc_auc", "precision", "accuracy"):
-        av = a.get(k, 0)
-        bv = b.get(k, 0)
-        if av > bv + 1e-9:
-            return True
-        if bv > av + 1e-9:
-            return False
-    return False
-
-def nondominated_front(points, objectives_directions):
+def nondominated_front(points):
     """
-    Simple non-dominated sorting for Pareto front.
-    points: list of numeric vectors
-    objectives_directions: list with 1 for minimize, -1 for maximize per objective
-    Returns indices of non-dominated points.
+    Return indices of non-dominated points (minimization).
+    points: list of numeric lists (each objective to minimize)
     """
     n = len(points)
     dominated = [False]*n
@@ -141,18 +139,16 @@ def nondominated_front(points, objectives_directions):
         for j in range(n):
             if i == j or dominated[j]:
                 continue
-            better_or_equal = True
-            strictly_better = False
-            for k, dirc in enumerate(objectives_directions):
-                vi = points[i][k]*dirc
-                vj = points[j][k]*dirc
-                if vj < vi - 1e-12:
-                    better_or_equal = False
+            # j dominates i if j <= i for all and < for at least one
+            all_leq = True
+            strictly_less = False
+            for a,b in zip(points[j], points[i]):
+                if b + 1e-12 < a:  # if i < j for some objective, then j not <= i
+                    all_leq = False
                     break
-                if vj > vi + 1e-12:
-                    strictly_better = True
-            # if j is at least as good as i on all objectives and strictly better on >=1, then i is dominated
-            if better_or_equal and strictly_better:
+                if a + 1e-12 < b:
+                    strictly_less = True
+            if all_leq and strictly_less:
                 dominated[i] = True
                 break
     return [i for i, d in enumerate(dominated) if not d]
@@ -163,7 +159,11 @@ def train_and_log(name, model):
         run_id = run.info.run_id
         try:
             print(f"[{name}] Training (run_id={run_id})")
+            t0 = time.time()
             model.fit(X_train, y_train)
+            t1 = time.time()
+            retrain_time = t1 - t0
+
             y_pred = model.predict(X_test)
             if hasattr(model, "predict_proba"):
                 try:
@@ -182,14 +182,23 @@ def train_and_log(name, model):
             f1 = f1_score(y_test, y_pred, zero_division=0)
             roc = safe_roc_auc(y_test, y_proba)
 
-            # measure latency on a small sample
+            # confusion matrix for false negatives
+            try:
+                tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+                fn_rate = float(fn) / float(fn + tp) if (fn + tp) > 0 else 0.0
+            except Exception:
+                fn_rate = 0.0
+
+            # latency and size
             sample_count = min(50, X_test.shape[0])
             X_sample = X_test[:sample_count]
             latency = measure_latency(model, X_sample, n_runs=10)
             model_size = measure_model_size(model)
 
+            # weighted score
             weighted = (weights['Accuracy']*acc + weights['Precision']*prec + weights['Recall']*rec + weights['F1-Score']*f1 + weights['ROC-AUC']*roc)
 
+            # MLflow logging
             mlflow.log_param("model_name", name)
             mlflow.log_metric("accuracy", float(acc))
             mlflow.log_metric("precision", float(prec))
@@ -197,8 +206,11 @@ def train_and_log(name, model):
             mlflow.log_metric("f1_score", float(f1))
             mlflow.log_metric("roc_auc", float(roc))
             mlflow.log_metric("weighted_score", float(weighted))
+            mlflow.log_metric("retrain_time_seconds", float(retrain_time))
             mlflow.log_metric("inference_latency_sec", float(latency))
             mlflow.log_metric("model_size_bytes", float(model_size))
+            mlflow.log_metric("false_negative_rate", float(fn_rate))
+
             mlflow.set_tag("project", PROJECT_NAME)
             mlflow.set_tag("model_name", name)
 
@@ -207,14 +219,14 @@ def train_and_log(name, model):
             except Exception as e:
                 print("mlflow log model failed:", e)
 
-            # Save a local copy of this model as <name>_model.pkl for fallback
+            # Save local model (fallback)
             try:
                 local_fn = MODEL_DIR / f"{name}_model.pkl"
                 joblib.dump(model, local_fn)
             except Exception as e:
                 print("Failed to locally save model:", e)
 
-            print(f"[{name}] done: weighted_score={weighted:.4f}")
+            print(f"[{name}] done: weighted_score={weighted:.4f}, retrain_time={retrain_time:.2f}s, fn_rate={fn_rate:.4f}")
             return {
                 "name": name,
                 "run_id": run_id,
@@ -224,8 +236,10 @@ def train_and_log(name, model):
                 "f1_score": f1,
                 "roc_auc": roc,
                 "weighted_score": weighted,
+                "retrain_time_seconds": retrain_time,
                 "latency": latency,
-                "model_size": model_size
+                "model_size": model_size,
+                "false_negative_rate": fn_rate
             }
         except Exception as e:
             print(f"[{name}] failed:", e)
@@ -233,9 +247,9 @@ def train_and_log(name, model):
             mlflow.set_tag("training_status", "failed")
             return {"name": name, "error": str(e)}
 
-# Parallel training using threads (threads share memory)
-best = {"score": -1, "name": None, "run_id": None, "registry": None}
+# Run training in parallel (thread pool)
 results = []
+best = {"score": -1, "name": None, "run_id": None, "registry": None}
 
 with ThreadPoolExecutor(max_workers=NUM_WORKER_THREADS) as ex:
     futures = {ex.submit(train_and_log, n, m): n for n, m in models.items()}
@@ -246,8 +260,8 @@ with ThreadPoolExecutor(max_workers=NUM_WORKER_THREADS) as ex:
             results.append(res)
             if "error" not in res:
                 score = float(res.get("weighted_score", -1))
+                # update best based on weighted_score as a quick filter
                 if score > best["score"]:
-                    # attempt register
                     run_id = res["run_id"]
                     registry_name = f"{PROJECT_NAME}_{res['name']}"
                     try:
@@ -259,64 +273,59 @@ with ThreadPoolExecutor(max_workers=NUM_WORKER_THREADS) as ex:
         except Exception as e:
             print("Future exception for", name, e)
 
-# --- Multi-objective Pareto selection (non-dominated sorting) ---
-# Objectives: maximize recall, precision, f1_score, roc_auc; minimize latency and model_size
+# Multi-objective selection using non-dominated sorting
+# Objectives (we want to maximize recall, precision, f1, roc; minimize latency & size & retrain time & fn_rate)
+# We'll transform maximize objectives by negation so we can treat all objectives as "minimize"
 objs = []
-for r in results:
-    if "error" in r:
-        continue
-    # We'll create a vector ordering: [ -recall, -precision, -f1, -roc, latency, model_size ]
-    # For nondominated routine, we provide numeric vectors directly and directions list
-    obj = [
-        -float(r.get("recall", 0.0)),
+valid_results = [r for r in results if "error" not in r]
+for r in valid_results:
+    vec = [
+        -float(r.get("recall", 0.0)),       # maximize -> minimize negative
         -float(r.get("precision", 0.0)),
         -float(r.get("f1_score", 0.0)),
         -float(r.get("roc_auc", 0.0)),
-        float(r.get("latency", 1e6)),
-        float(r.get("model_size", 1e12))
+        float(r.get("latency", 1e6)),      # minimize latency
+        float(r.get("model_size", 1e12)),  # minimize size
+        float(r.get("retrain_time_seconds", 1e6)),  # minimize retrain time
+        float(r.get("false_negative_rate", 1.0))    # minimize FN rate
     ]
-    objs.append(obj)
+    objs.append(vec)
 
-selected_idx = []
+pareto_indices = []
 if objs:
-    # directions: -1 means maximize (we converted), 1 means minimize (latency, size)
-    # Our nondominated function expects points and directions where we treat larger*dirc as worse.
-    # We'll convert to "points" where higher is worse for each objective; supply directions accordingly.
-    # Simpler: call nondominated_front with objectives_directions all = 1 (minimize),
-    # because we've already flipped maximize objectives by negation.
-    indices = nondominated_front(objs, objectives_directions=[1,1,1,1,1,1])
-    selected_idx = indices
-    pareto_models = [results[i] for i in selected_idx]
+    pareto_indices = nondominated_front(objs)
+    pareto_models = [valid_results[i] for i in pareto_indices]
 else:
     pareto_models = []
 
-# Tie-breaker using healthcare priorities (recall then f1 then roc_auc)
+# tie-breaker: healthcare priority (recall -> f1 -> roc_auc)
 if pareto_models:
     pareto_models = sorted(pareto_models, key=lambda x: (x.get("recall",0), x.get("f1_score",0), x.get("roc_auc",0)), reverse=True)
     chosen = pareto_models[0]
-    # set best accordingly
     best = {"score": float(chosen.get("weighted_score", -1)), "name": chosen["name"], "run_id": chosen.get("run_id"), "registry": None}
-    # attempt register chosen model again (idempotent)
+    # attempt to register chosen model name (if not already)
     try:
-        reg_name = f"{PROJECT_NAME}_{chosen['name']}"
-        registered = mlflow.register_model(f"runs:/{chosen.get('run_id')}/model", reg_name)
-        best["registry"] = {"name": reg_name, "version": getattr(registered, "version", None)}
+        registry_name = f"{PROJECT_NAME}_{chosen['name']}"
+        registered = mlflow.register_model(f"runs:/{chosen.get('run_id')}/model", registry_name)
+        best["registry"] = {"name": registry_name, "version": getattr(registered, "version", None)}
     except Exception as e:
         print("Registering chosen model failed:", e)
 
+# summary
 summary = {
     "project": PROJECT_NAME,
     "results": results,
-    "pareto_indices": selected_idx,
+    "pareto_indices": pareto_indices,
     "pareto_models": pareto_models,
-    "best": best
+    "best": best,
+    "ts": int(time.time())
 }
 with open(MODEL_DIR / "last_run_summary.json", "w") as fh:
     json.dump(summary, fh, indent=2)
 
 print("Training complete. Best:", best)
 
-# Save model metadata (include baseline distributions derived from X_train using scaler if available)
+# Build model_metadata.json (baseline distributions + metrics)
 metadata = {
     "project": PROJECT_NAME,
     "best": best,
@@ -324,24 +333,27 @@ metadata = {
     "generated_at": int(time.time())
 }
 
-# attempt to create baseline unscaled distributions
 try:
-    if scaler is not None:
-        X_train_unscaled = scaler.inverse_transform(X_train)
+    if X_train_unscaled_df is not None:
+        df = X_train_unscaled_df
+        feat_names = list(df.columns)
+        feature_distributions = {str(c): df[c].dropna().tolist() for c in feat_names}
+        feature_means = {str(c): float(df[c].mean()) for c in feat_names}
+        feature_stds = {str(c): float(df[c].std()) for c in feat_names}
     else:
-        # assume X_train is already unscaled
-        X_train_unscaled = X_train
-    # column names are unknown because preprocess stored numpy; we will name them feat0..featN
-    n_feats = X_train_unscaled.shape[1]
-    feat_names = [f"feat_{i}" for i in range(n_feats)]
-    feature_distributions = {}
-    feature_means = {}
-    feature_stds = {}
-    for i, name in enumerate(feat_names):
-        arr = X_train_unscaled[:, i].tolist()
-        feature_distributions[name] = arr
-        feature_means[name] = float(np.nanmean(arr))
-        feature_stds[name] = float(np.nanstd(arr))
+        # derive names as feat_0..N and use scaled data inverse-transform if scaler exists
+        if scaler is not None:
+            try:
+                X_train_unscaled = scaler.inverse_transform(X_train)
+            except Exception:
+                X_train_unscaled = X_train
+        else:
+            X_train_unscaled = X_train
+        n_feats = X_train_unscaled.shape[1]
+        feat_names = [f"feat_{i}" for i in range(n_feats)]
+        feature_distributions = {feat_names[i]: X_train_unscaled[:, i].tolist() for i in range(n_feats)}
+        feature_means = {feat_names[i]: float(np.nanmean(X_train_unscaled[:, i])) for i in range(n_feats)}
+        feature_stds = {feat_names[i]: float(np.nanstd(X_train_unscaled[:, i])) for i in range(n_feats)}
 
     metadata["baseline"] = {
         "feature_names": feat_names,
@@ -350,9 +362,9 @@ try:
         "feature_stds": feature_stds
     }
 except Exception as e:
-    print("Failed to write baseline distributions:", e)
+    print("Failed to compute baseline distributions:", e)
 
-# write into models/model_metadata.json (augment existing metadata if present)
+# Attempt to append existing metadata (if present) and write final metadata
 meta_path = MODEL_DIR / "model_metadata.json"
 try:
     existing = {}
@@ -361,6 +373,7 @@ try:
             existing = json.load(open(meta_path))
         except Exception:
             existing = {}
+    # merge but do not overwrite critical keys unless new
     existing.update(metadata)
     with open(meta_path, "w") as fh:
         json.dump(existing, fh, indent=2)
@@ -368,13 +381,27 @@ try:
 except Exception as e:
     print("Failed to write model metadata:", e)
 
-# Push metric to pushgateway
+# Push summary metric to Pushgateway for monitoring dashboards
 if PUSHGATEWAY_URL and best.get("name"):
     try:
-        payload = f'model_weighted_score{{project="{PROJECT_NAME}",model="{best["name"]}"}} {best["score"]}\n'
+        payload_lines = []
+        payload_lines.append(f'model_weighted_score{{project="{PROJECT_NAME}",model="{best["name"]}"}} {best["score"]}')
+        # include retrain time metric (best model retrain time if available)
+        chosen_res = None
+        for r in results:
+            if r.get("name") == best.get("name"):
+                chosen_res = r
+                break
+        if chosen_res:
+            payload_lines.append(f'retrain_time_seconds{{project="{PROJECT_NAME}",model="{best["name"]}"}} {chosen_res.get("retrain_time_seconds", -1)}')
+            payload_lines.append(f'false_negative_rate{{project="{PROJECT_NAME}",model="{best["name"]}"}} {chosen_res.get("false_negative_rate", -1)}')
+            payload_lines.append(f'inference_latency_seconds{{project="{PROJECT_NAME}",model="{best["name"]}"}} {chosen_res.get("latency", -1)}')
+        payload = "\n".join(payload_lines) + "\n"
         job = f"{PROJECT_NAME}_modelmonitor"
         resp = requests.post(f"{PUSHGATEWAY_URL}/metrics/job/{job}", data=payload, timeout=10)
         print("Pushgateway status:", resp.status_code)
     except Exception as e:
         print("Push to pushgateway failed:", e)
+
+# End
 
