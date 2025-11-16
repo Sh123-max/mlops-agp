@@ -1,20 +1,29 @@
+# prometheus.yml
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+  scrape_timeout: 10s
+
+rule_files:
+  - "/etc/prometheus/alert_rules.yml"
 
 scrape_configs:
+  # Prometheus self job (optional)
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']
 
+  # Flask app job (explicit metrics_path, replace target as required)
   - job_name: 'flask_app'
+    metrics_path: /metrics
     static_configs:
-      - targets: ['host.docker.internal:5000']
+      - targets: ['host.docker.internal:5000']   # in Docker Desktop, host.docker.internal maps to host
+      # If running Prometheus in same docker-compose network as the flask container, use:
+      # - targets: ['flask_app:5000']   # (replace flask_app with your service name)
 
+  # Pushgateway job
   - job_name: 'pushgateway'
     metrics_path: /metrics
     static_configs:
-      - targets: ['pushgateway:9091']
+      - targets: ['pushgateway:9091']   # replace with actual Pushgateway host if different
 
-rule_files:
-  - "/etc/prometheus/alert_rules.yml"

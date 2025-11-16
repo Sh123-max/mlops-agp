@@ -1,11 +1,69 @@
+# alert_rules.yml
 groups:
-- name: model_alerts
-  rules:
-  - alert: ModelPerformanceDrop
-    expr: avg_over_time(model_weighted_score{project="diabetes"}[15m]) < 0.60
-    for: 10m
-    labels:
-      severity: critical
-    annotations:
-      summary: "Diabetes model weighted score below 0.60"
-      description: "Model weighted score has been below 0.60 for 10 minutes; consider automatic retrain."
+  - name: mlops-flask-alerts
+    rules:
+      - alert: HighPredictionLatencyP99
+        expr: histogram_quantile(0.99, sum(rate(prediction_latency_seconds_bucket[5m])) by (le)) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High P99 prediction latency"
+          description: "P99 prediction latency > 1s for more than 2 minutes."
+
+      - alert: HighPredictionLatencyP90
+        expr: histogram_quantile(0.90, sum(rate(prediction_latency_seconds_bucket[5m])) by (le)) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High P90 prediction latency"
+          description: "P90 prediction latency > 0.5s for more than 5 minutes."
+
+      - alert: HighRequestExceptions
+        expr: increase(flask_http_request_exceptions_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Flask exceptions observed"
+          description: "There were one or more uncaught exceptions in the last 5 minutes."
+
+      - alert: HighErrorRate5m
+        expr: rate(flask_http_request_total[5m]) > 0 and
+              (sum by (status)(rate(flask_http_request_total[5m])) - sum by (status)(rate(flask_http_request_total{status=~"2.."}[5m]))) 
+              / sum(rate(flask_http_request_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High HTTP error rate"
+          description: "More than 5% of requests were non-2xx in the last 5 minutes."
+
+      - alert: ModelAccuracyDrop
+        expr: ml_current_model_accuracy < 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deployed model accuracy is below threshold"
+          description: "ml_current_model_accuracy < 0.80 for 5 minutes."
+
+      - alert: ModelVersionMissing
+        expr: absent(model_version_info)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Model version info missing"
+          description: "model_version_info metric is not present; the model may not be loaded."
+
+      - alert: PushgatewayMetricMissing
+        expr: absent(model_weighted_score)
+        for: 60m
+        labels:
+          severity: info
+        annotations:
+          summary: "model_weighted_score not present"
+          description: "No model_weighted_score metric found from Pushgateway for 60 minutes. This may be okay if no training has run recently."
+
