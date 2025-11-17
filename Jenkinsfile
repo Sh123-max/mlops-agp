@@ -1,3 +1,4 @@
+// Jenkinsfile - bash-forced, quote-safe full pipeline
 pipeline {
     agent any
 
@@ -26,9 +27,8 @@ pipeline {
         }
 
         stage('Prepare Python env & deps (venv)') {
-    steps {
-        // triple-single quotes -> Groovy won't interpolate $ or ${}
-        sh(''' 
+            steps {
+                sh('''bash -lc <<'BASH'
 set -euo pipefail
 
 echo "NODE PYTHON PATH: $(which python3 || true)"
@@ -90,96 +90,102 @@ if missing: \
     sys.exit(6); \
 else: \
     print('Python deps OK')"
+BASH
 ''')
-    }
-}
+            }
+        }
 
         stage('Preprocess') {
             steps {
-                sh '''
-#!/usr/bin/env bash
+                sh('''bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
 python preprocess.py
-'''
+BASH
+''')
             }
         }
 
         stage('Train') {
             steps {
                 script {
-                    env.TRAIN_START = sh(script: '''
-#!/usr/bin/env bash
+                    env.TRAIN_START = sh(returnStdout: true, script: '''bash -lc <<'BASH'
 . "${VENV_DIR}/bin/activate"
-python -c "import time; print(int(time.time()))"
-''', returnStdout: true).trim()
-                }
-                sh '''
-#!/usr/bin/env bash
+python - <<'PY'
+import time
+print(int(time.time()))
+PY
+BASH
+''').trim()
+
+                    sh('''bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
 python trainandevaluate.py 2>&1 | tee train_log.txt
-'''
-                script {
-                    env.TRAIN_END = sh(script: '''
-#!/usr/bin/env bash
+BASH
+''')
+
+                    env.TRAIN_END = sh(returnStdout: true, script: '''bash -lc <<'BASH'
 . "${VENV_DIR}/bin/activate"
-python -c "import time; print(int(time.time()))"
-''', returnStdout: true).trim()
+python - <<'PY'
+import time
+print(int(time.time()))
+PY
+BASH
+''').trim()
                 }
             }
         }
 
         stage('Record retrain time metric') {
             steps {
-                sh '''
-#!/usr/bin/env bash
+                sh('''bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
-python -c "
+python - <<'PY'
 import os
-start = int(os.environ.get('TRAIN_START', '0'))
-end = int(os.environ.get('TRAIN_END', '0'))
+start = int(os.environ.get("TRAIN_START", "0"))
+end = int(os.environ.get("TRAIN_END", "0"))
 t = end - start if (start and end) else 0
-with open('retrain_time.txt','w') as f:
+with open("retrain_time.txt","w") as f:
     f.write(str(t))
-print('retrain_time_seconds:', t)
-"
-'''
+print("retrain_time_seconds:", t)
+PY
+BASH
+''')
                 archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', fingerprint: true
             }
         }
 
         stage('Deploy') {
             steps {
-                sh '''
-#!/usr/bin/env bash
+                sh('''bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
 python deploy.py --project "${PROJECT_NAME}" --stage Staging || true
 if [ ! -f deployment_time.txt ]; then
   echo 0 > deployment_time.txt
 fi
-'''
+BASH
+''')
                 archiveArtifacts artifacts: 'deployment_time.txt', fingerprint: true
             }
         }
 
         stage('Evaluate Drift Accuracy (7-day)') {
             steps {
-                sh '''
-#!/usr/bin/env bash
+                sh('''bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
-python -c "
+python - <<'PY'
 import joblib, os, json, time
 from sklearn.metrics import accuracy_score
 model = None
-deploy_dir = os.path.join('models','deployed_model')
+deploy_dir = os.path.join("models","deployed_model")
 if os.path.exists(deploy_dir):
     for root,_,files in os.walk(deploy_dir):
         for f in files:
-            if f.endswith(('.pkl', '.joblib')):
+            if f.endswith((".pkl", ".joblib")):
                 try:
                     model = joblib.load(os.path.join(root,f))
                     break
@@ -187,37 +193,38 @@ if os.path.exists(deploy_dir):
                     pass
         if model:
             break
-if model is None and os.path.exists('models'):
-    for f in os.listdir('models'):
-        if f.endswith(('_model.pkl', '.pkl', '.joblib')):
+if model is None and os.path.exists("models"):
+    for f in os.listdir("models"):
+        if f.endswith(("_model.pkl", ".pkl", ".joblib")):
             try:
-                model = joblib.load(os.path.join('models', f))
+                model = joblib.load(os.path.join("models", f))
                 break
             except Exception:
                 pass
 
 acc = 0.0
-if model is not None and os.path.exists(os.path.join('data','X_test.pkl')) and os.path.exists(os.path.join('data','y_test.pkl')):
-    X_test = joblib.load(os.path.join('data','X_test.pkl'))
-    y_test = joblib.load(os.path.join('data','y_test.pkl'))
+if model is not None and os.path.exists(os.path.join("data","X_test.pkl")) and os.path.exists(os.path.join("data","y_test.pkl")):
+    X_test = joblib.load(os.path.join("data","X_test.pkl"))
+    y_test = joblib.load(os.path.join("data","y_test.pkl"))
     try:
         y_pred = model.predict(X_test)
         acc = float(accuracy_score(y_test, y_pred))
     except Exception:
         acc = 0.0
 
-meta_path = os.path.join('models','model_metadata.json')
+meta_path = os.path.join("models","model_metadata.json")
 meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
-meta.setdefault('evaluations', [])
-entry = {'ts': int(time.time()), 'accuracy_last_test': acc}
-meta['evaluations'].append(entry)
-meta['evaluations'] = meta['evaluations'][-20:]
-os.makedirs('models', exist_ok=True)
-with open(meta_path, 'w') as f:
+meta.setdefault("evaluations", [])
+entry = {"ts": int(time.time()), "accuracy_last_test": acc}
+meta["evaluations"].append(entry)
+meta["evaluations"] = meta["evaluations"][-20:]
+os.makedirs("models", exist_ok=True)
+with open(meta_path, "w") as f:
     json.dump(meta, f, indent=2)
-print('accuracy_after_drift:', acc)
-"
-'''
+print("accuracy_after_drift:", acc)
+PY
+BASH
+''')
                 archiveArtifacts artifacts: 'models/model_metadata.json', fingerprint: true
             }
         }
@@ -230,27 +237,27 @@ print('accuracy_after_drift:', acc)
                 }
             }
             steps {
-                sh '''
-#!/usr/bin/env bash
+                sh('''bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
-python -c "
+python - <<'PY'
 import os
-with open('manual_intervention.txt','a') as fh:
-    fh.write('manual_intervention\\n')
-pg = os.environ.get('PUSHGATEWAY_URL')
+with open("manual_intervention.txt","a") as fh:
+    fh.write("manual_intervention\\n")
+pg = os.environ.get("PUSHGATEWAY_URL")
 if pg:
     try:
         from prometheus_client import Gauge, CollectorRegistry, push_to_gateway
         registry = CollectorRegistry()
-        g = Gauge('manual_intervention_count', 'Manual interventions count', registry=registry)
+        g = Gauge("manual_intervention_count", "Manual interventions count", registry=registry)
         g.set(1)
-        push_to_gateway(pg + '/metrics/job/${PROJECT_NAME}_manual', registry=registry)
+        push_to_gateway(pg + "/metrics/job/${PROJECT_NAME}_manual", registry=registry)
     except Exception as e:
-        print('Pushgateway push failed:', e)
-print('Manual intervention logged.')
-"
-'''
+        print("Pushgateway push failed:", e)
+print("Manual intervention logged.")
+PY
+BASH
+''')
                 archiveArtifacts artifacts: 'manual_intervention.txt', fingerprint: true
             }
         }
