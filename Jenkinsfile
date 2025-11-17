@@ -1,5 +1,5 @@
 // Jenkinsfile (declarative pipeline) for the MLOps flow:
-// Checkout -> Preprocess -> Train -> Deploy -> Evaluate drift accuracy -> (Manual intervention logging optional)
+// Checkout -> Setup Environment -> Check Python Modules -> Preprocess -> Train -> Deploy -> Evaluate drift accuracy -> (Manual intervention logging optional)
 // Assumes Jenkins agent has Python, docker, and environment configured.
 
 pipeline {
@@ -22,6 +22,20 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
+            }
+        }
+
+        stage('Setup Environment') {
+            steps {
+                // Install Python dependencies from requirements.txt
+                sh 'pip3 install -r requirements.txt'
+            }
+        }
+
+        stage('Check Python Modules') {
+            steps {
+                // Sanity check for pandas installation, installs if missing
+                sh 'python3 -c "import pandas" || pip3 install pandas'
             }
         }
 
@@ -174,17 +188,12 @@ PY
     post {
         success {
             script {
-                // optionally push deployment_time.txt and retrain_time.txt content to an external metrics collector
                 def deployTime = readFile('deployment_time.txt').trim()
                 def retrainTime = readFile('retrain_time.txt').trim()
                 echo "Deployment time (s): ${deployTime}"
                 echo "Retrain time (s): ${retrainTime}"
             }
         }
-        failure {
-            mail to: 'you@example.com',
-                 subject: "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                 body: "See Jenkins console output for details."
-        }
+        // Removed failure email notification section as requested
     }
 }
