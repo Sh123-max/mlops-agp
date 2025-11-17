@@ -21,37 +21,37 @@ pipeline {
                 checkout scm
             }
         }
-    stage('Clean Virtual Environment') {
-    steps {
-        sh 'rm -rf venv'
-    }
-}
+
+        stage('Clean Virtual Environment') {
+            steps {
+                sh 'rm -rf venv'
+                sh 'pip cache purge || true' // clean pip cache to remove failed builds
+            }
+        }
 
         stage('Setup Environment') {
             steps {
                 script {
-                    // Create virtual environment if not exists
-                    if (!fileExists(env.VENV_DIR)) {
-                        sh "python3 -m venv ${env.VENV_DIR}"
-                    }
-                    // Upgrade pip and install requirements in venv
                     sh """
+                        python3 -m venv ${env.VENV_DIR}
                         . ${env.VENV_DIR}/bin/activate
                         pip install --upgrade pip
+                        pip install wheel setuptools --upgrade
                         pip install -r requirements.txt
                     """
                 }
             }
         }
 
-        stage('Check Python Modules') {
+        stage('Verify Python Modules') {
             steps {
-                script {
-                    sh """
-                        . ${env.VENV_DIR}/bin/activate
-                        python -c "import pandas" || pip install pandas
-                    """
-                }
+                sh """
+                    . ${env.VENV_DIR}/bin/activate
+                    python -c "import pandas; print('pandas OK')"
+                    python -c "import numpy; print('numpy OK')"
+                    python -c "import pyarrow; print('pyarrow OK')"
+                    python -c "import sklearn; print('sklearn OK')"
+                """
             }
         }
 
