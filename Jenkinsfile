@@ -8,7 +8,7 @@ pipeline {
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
         REQUIREMENTS = "${env.REQUIREMENTS ?: 'requirements.txt'}"
         ENABLE_MAIL  = "${env.ENABLE_MAIL ?: 'false'}"
-        INSTALL_BUILD_DEPS = "${env.INSTALL_BUILD_DEPS ?: 'false'}"
+        INSTALL_BUILD_DEPS = "true"
         VENV_DIR     = "${env.VENV_DIR ?: '.venv'}"
         PYTHONUNBUFFERED = "1"
     }
@@ -38,14 +38,12 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 3
 fi
 
-# create venv (idempotent)
 python3 -m venv "${VENV_DIR}"
 . "${VENV_DIR}/bin/activate"
 
 python -m pip install --upgrade pip setuptools wheel
 
-# Make sure we have at least numpy wheel to help binary SciPy install
-echo "Installing numpy (prefer binary wheels)"
+echo "Installing numpy first (prefer binary wheel)"
 pip install --no-cache-dir --prefer-binary numpy || true
 
 INSTALLED_OK=0
@@ -93,7 +91,6 @@ if [ "${INSTALLED_OK}" -eq 0 ]; then
   fi
 fi
 
-# robust multi-line python dependency check to avoid one-liner syntax issues
 python - <<'PY'
 import importlib, sys
 reqs = ['pandas','numpy','sklearn','joblib']
@@ -242,89 +239,4 @@ if model is None and os.path.exists("models"):
                 pass
 
 acc = 0.0
-if model is not None and os.path.exists(os.path.join("data","X_test.pkl")) and os.path.exists(os.path.join("data","y_test.pkl")):
-    X_test = joblib.load(os.path.join("data","X_test.pkl"))
-    y_test = joblib.load(os.path.join("data","y_test.pkl"))
-    try:
-        y_pred = model.predict(X_test)
-        acc = float(accuracy_score(y_test, y_pred))
-    except Exception:
-        acc = 0.0
-
-meta_path = os.path.join("models","model_metadata.json")
-meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
-meta.setdefault("evaluations", [])
-entry = {"ts": int(time.time()), "accuracy_last_test": acc}
-meta["evaluations"].append(entry)
-meta["evaluations"] = meta["evaluations"][-20:]
-os.makedirs("models", exist_ok=True)
-with open(meta_path, "w") as f:
-    json.dump(meta, f, indent=2)
-print("accuracy_after_drift:", acc)
-PY
-BASH
-''')
-                archiveArtifacts artifacts: 'models/model_metadata.json', fingerprint: true
-            }
-        }
-
-        stage('Manual Intervention Logging (optional)') {
-            when {
-                anyOf {
-                    triggeredBy 'UserIdCause'
-                    expression { return (params != null && params.containsKey('FORCE_MANUAL_LOG') && params.FORCE_MANUAL_LOG.toString().toBoolean()) }
-                }
-            }
-            steps {
-                sh('''bash -s <<'BASH'
-#!/usr/bin/env bash
-set -euo pipefail
-. "${VENV_DIR}/bin/activate"
-python - <<'PY'
-import os
-with open('manual_intervention.txt','a') as fh:
-    fh.write('manual_intervention\n')
-pg = os.environ.get('PUSHGATEWAY_URL')
-if pg:
-    try:
-        from prometheus_client import Gauge, CollectorRegistry, push_to_gateway
-        registry = CollectorRegistry()
-        g = Gauge('manual_intervention_count', 'Manual interventions count', registry=registry)
-        g.set(1)
-        push_to_gateway(pg + '/metrics/job/%s_manual' % os.environ.get('PROJECT_NAME', 'project'), registry=registry)
-    except Exception as e:
-        print('Pushgateway push failed:', e)
-print('Manual intervention logged.')
-PY
-BASH
-''')
-                archiveArtifacts artifacts: 'manual_intervention.txt', fingerprint: true
-            }
-        }
-    }
-
-    post {
-        success {
-            script {
-                echo "SUCCESS: reading archived times if present"
-                if (fileExists('deployment_time.txt')) {
-                    echo "Deployment time (s): " + readFile('deployment_time.txt').trim()
-                }
-                if (fileExists('retrain_time.txt')) {
-                    echo "Retrain time (s): " + readFile('retrain_time.txt').trim()
-                }
-            }
-        }
-        failure {
-            script {
-                if (env.ENABLE_MAIL == 'true') {
-                    mail to: 'you@example.com',
-                         subject: "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                         body: "See Jenkins console output for details."
-                } else {
-                    echo "Build failed but mail disabled (ENABLE_MAIL!=true)."
-                }
-            }
-        }
-    }
-}
+if model is not None and os.path.exists(os.path.join("data","X_test.pkl")) and os.path.exists(os.path.join("data","y
