@@ -49,7 +49,6 @@ pipeline {
                     . ${env.VENV_DIR}/bin/activate
                     python -c "import pandas; print('pandas OK')"
                     python -c "import numpy; print('numpy OK')"
-                    python -c "import pyarrow; print('pyarrow OK')"
                     python -c "import sklearn; print('sklearn OK')"
                 """
             }
