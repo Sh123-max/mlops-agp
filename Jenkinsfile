@@ -1,96 +1,206 @@
+// Jenkinsfile (declarative pipeline) for the MLOps flow:
+// Checkout -> Preprocess -> Train -> Deploy -> Evaluate drift accuracy -> (Manual intervention logging optional)
+// Assumes Jenkins agent has Python, docker, and environment configured.
+[cite_start]// Adjust paths as needed. [cite: 2]
+
 pipeline {
     agent any
 
     environment {
-        // Virtual environment inside workspace
-        VENV = "${WORKSPACE}/venv"
+        PROJECT_NAME = "${env.PROJECT_NAME ?: 'diabetes'}"
+        DATA_DIR = "${env.DATA_DIR ?: 'data'}"
+        MODEL_DIR = "${env.MODEL_DIR ?: 'models'}"
+        MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
+    }
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        [cite_start]timeout(time: 2, unit: 'HOURS') [cite: 3]
     }
 
     stages {
-
         stage('Checkout') {
             steps {
-                echo 'Checking out repository...'
                 checkout scm
             }
         }
 
-        stage('Setup Python Environment') {
+        stage('Preprocess') {
             steps {
-                echo 'Creating virtual environment and installing dependencies...'
-                sh '''
-                    # Clean old venv if exists
-                    rm -rf "$VENV"
-
-                    # Create virtual environment
-                    python3 -m venv "$VENV"
-
-                    # Activate
-                    . "$VENV/bin/activate"
-
-                    # Upgrade pip
-                    pip install --upgrade pip setuptools wheel
-
-                    # Force install working pre-built SciPy wheel
-                    pip install --force-reinstall scipy==1.16.3
-
-                    # Now install other requirements
-                    pip install -r requirements.txt
-                '''
+          
+                sh """
+                    python3 preprocess.py
+                [cite_start]""" [cite: 4]
             }
         }
 
-        stage('Run Preprocessing') {
+        stage('Train') {
             steps {
-                echo 'Running preprocessing script...'
-                sh '''
-                    . "$VENV/bin/activate"
-                    python preprocess.py
-                '''
+              
+                [cite_start]script { [cite: 5]
+                    // record training start time
+                    env.TRAIN_START = sh(script: "python3 - <<'PY'\nimport time\nprint(int(time.time()))\nPY", returnStdout: true).trim()
+                    [cite_start]sh "python3 trainandevaluate.py 2>&1 | tee train_log.txt" [cite: 6]
+                    env.TRAIN_END = sh(script: "python3 - <<'PY'\nimport time\nprint(int(time.time()))\nPY", returnStdout: true).trim()
+                }
             }
         }
 
-        stage('Train & Evaluate Model') {
+        stage('Record retrain time metric') {
             steps {
-                echo 'Training and evaluating model...'
-                sh '''
-                    . "$VENV/bin/activate"
-                    python trainandevaluate.py
-                '''
+          
+                [cite_start]script { [cite: 7]
+                    // compute and save retrain_time_seconds to file for later use/archival
+                    sh """
+                        python3 - <<'PY'
+import os, json, time
+start = int(os.environ.get('TRAIN_START', '0'))
+end = int(os.environ.get('TRAIN_END', '0'))
+[cite_start]t = end - start if (start and end) else 0 [cite: 8]
+with open('retrain_time.txt','w') as f:
+    f.write(str(t))
+print("retrain_time_seconds:", t)
+PY
+                    """
+                    archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', fingerprint: true
+                }
             }
         }
 
-        stage('Deploy Model') {
-            steps {
-                echo 'Deploying model...'
-                sh '''
-                    . "$VENV/bin/activate"
-                    python deploy.py
-                '''
+        stage('Deploy') {
+ 
+            [cite_start]steps { [cite: 9]
+                script {
+                    def deployStart = System.currentTimeMillis()
+                    // call deploy.py to fetch model artifacts and copy into models/deployed_model
+                  
+                    [cite_start]sh "python3 deploy.py --project ${env.PROJECT_NAME} --stage Staging" [cite: 10]
+                    def deployEnd = System.currentTimeMillis()
+                    def deploySeconds = (deployEnd - deployStart) / 1000
+                    writeFile file: 'deployment_time.txt', text: deploySeconds.toString()
+                  
+                    [cite_start]archiveArtifacts artifacts: 'deployment_time.txt', fingerprint: true [cite: 11]
+                }
             }
         }
 
-        stage('Optional: Evaluate Drift') {
+        stage('Evaluate Drift Accuracy (7-day)') {
             steps {
-                echo 'Optional: evaluating drift...'
-                sh '''
-                    . "$VENV/bin/activate"
-                    python evaluate_drift.py || echo "Drift script not found, skipping."
-                '''
+                // run a small evaluation that computes accuracy on test set (or a 7-day window if available)
+ 
+                [cite_start]sh ''' [cite: 12]
+python3 - <<'PY'
+import joblib, os, json
+from sklearn.metrics import accuracy_score
+# load deployed model (fallback local)
+model = None
+deploy_dir = os.path.join("models","deployed_model")
+if os.path.exists(deploy_dir):
+    for root,_,files in os.walk(deploy_dir):
+        for f in files:
+            if f.endswith(".pkl") or f.endswith(".joblib"):
+                try:
+                 
+                    [cite_start]model = joblib.load(os.path.join(root,f)) [cite: 13]
+                    break
+                except Exception:
+                    pass
+        if model:
+            break
+if model is None:
+    # fallback to any local model
+    [cite_start]for f in os.listdir("models"): [cite: 14]
+        if f.endswith("_model.pkl"):
+            try:
+                model = joblib.load(os.path.join("models", f))
+                break
+            except Exception:
+                pass
+
+# load test set
+if os.path.exists(os.path.join("data","X_test.pkl")) and os.path.exists(os.path.join("data","y_test.pkl")):
+    X_test = joblib.load(os.path.join("data","X_test.pkl"))
+ 
+    [cite_start]y_test = joblib.load(os.path.join("data","y_test.pkl")) [cite: 15]
+    try:
+        y_pred = model.predict(X_test)
+        acc = float(accuracy_score(y_test, y_pred))
+    except Exception:
+        acc = 0.0
+else:
+    acc = 0.0
+
+# write metric and append to model metadata
+meta_path = os.path.join("models","model_metadata.json")
+meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
+meta.setdefault("evaluations", [])
+entry = {"ts": int(time.time()), "accuracy_last_test": acc}
+meta["evaluations"].append(entry)
+meta["evaluations"] = meta["evaluations"][-20:]
+with open(meta_path, "w") as f:
+    json.dump(meta, f, indent=2)
+print("accuracy_after_drift:", acc)
+PY
+'''
+               
+                [cite_start]archiveArtifacts artifacts: 'models/model_metadata.json', fingerprint: true [cite: 16]
             }
         }
 
+        stage('Manual Intervention Logging (optional)') {
+            when {
+                anyOf {
+                    // trigger when build was user-triggered
+        
+                    [cite_start]triggeredBy 'UserIdCause' [cite: 17]
+                    expression { return params.get('FORCE_MANUAL_LOG', false) == true }
+                }
+            }
+            steps {
+                sh '''
+[cite_start]python3 - <<'PY' [cite: 18]
+from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
+import os
+# simple manual intervention recorder file
+with open('manual_intervention.txt','a') as fh:
+    fh.write("manual_intervention\\n")
+# Optionally push a metric to pushgateway if configured
+pg = os.environ.get('PUSHGATEWAY_URL', None)
+if pg:
+    try:
+        from prometheus_client import Gauge, CollectorRegistry, push_to_gateway
+        registry = CollectorRegistry()
+        g = Gauge('manual_intervention_count', 'Manual interventions count', registry=registry)
+        g.set(1)
+        push_to_gateway(pg + '/metrics/job/${PROJECT_NAME}_manual', registry=registry)
+    except Exception as e:
+   
+        [cite_start]print("Pushgateway manual log failed:", e) [cite: 19]
+print("Manual intervention logged.")
+PY
+'''
+                archiveArtifacts artifacts: 'manual_intervention.txt', fingerprint: true
+            }
+        }
     }
 
     post {
-        always {
-            echo 'Pipeline finished. Cleaning up workspace if needed.'
-        }
         success {
-            echo 'Pipeline completed successfully!'
-        }
+            script {
+                // optionally 
+                [cite_start]// push deployment_time.txt and retrain_time.txt content to an external metrics collector [cite: 20]
+                def deployTime = readFile('deployment_time.txt').trim()
+                def retrainTime = readFile('retrain_time.txt').trim()
+                echo "Deployment time (s): ${deployTime}"
+                echo "Retrain time (s): ${retrainTime}"
+            }
+ 
+        [cite_start]} [cite: 21]
         failure {
-            echo 'Pipeline failed. Check the logs above.'
+            mail to: 'you@example.com',
+                 subject: "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                 body: "See Jenkins console output for details."
         }
     }
 }
