@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        // Virtual environment inside workspace (no permission issues)
+        // Virtual environment inside workspace
         VENV = "${WORKSPACE}/venv"
     }
 
@@ -10,29 +10,31 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                echo 'Checking out the repository...'
+                echo 'Checking out repository...'
                 checkout scm
             }
         }
 
         stage('Setup Python Environment') {
             steps {
-                echo 'Creating virtual environment and upgrading pip...'
+                echo 'Creating virtual environment and installing dependencies...'
                 sh '''
-                    # Remove existing venv if exists
+                    # Clean old venv if exists
                     rm -rf "$VENV"
 
                     # Create virtual environment
                     python3 -m venv "$VENV"
 
-                    # Activate and upgrade pip, setuptools, wheel
+                    # Activate
                     . "$VENV/bin/activate"
+
+                    # Upgrade pip
                     pip install --upgrade pip setuptools wheel
 
-                    # Install prebuilt SciPy wheel (avoid compilation errors)
+                    # Force install working pre-built SciPy wheel
                     pip install --force-reinstall scipy==1.16.3
 
-                    # Install all other dependencies from requirements.txt
+                    # Now install other requirements
                     pip install -r requirements.txt
                 '''
             }
