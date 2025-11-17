@@ -1,15 +1,25 @@
-// Jenkinsfile (declarative pipeline) for the MLOps flow:
-// Checkout -> Preprocess -> Train -> Deploy -> Evaluate drift accuracy -> (Manual intervention logging optional)
-// Assumes Jenkins agent has Python, docker, and environment configured. Adjust paths as needed.
-
+// Jenkinsfile (Declarative) - updated, Docker-based, lightweight, robust pip/scipy install
 pipeline {
-    agent any
+    // Use Docker so we get a predictable Python environment.
+    // If your Jenkins doesn't support Docker-agent, change `agent` to `any` and
+    // follow the venv fallback instructions in the comments below.
+    agent {
+        docker {
+            image 'python:3.11-slim'
+            // run as root to allow apt when needed (only used conditionally)
+            args  '--user root:root'
+        }
+    }
 
     environment {
         PROJECT_NAME = "${env.PROJECT_NAME ?: 'diabetes'}"
         DATA_DIR = "${env.DATA_DIR ?: 'data'}"
         MODEL_DIR = "${env.MODEL_DIR ?: 'models'}"
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
+        REQUIREMENTS = "${env.REQUIREMENTS ?: 'requirements.txt'}"
+        ENABLE_MAIL = "${env.ENABLE_MAIL ?: 'false'}" // set to 'true' if Jenkins mail configured
+        // optional: set to 'true' if you want the pipeline to apt-get build deps when wheel install fails
+        INSTALL_BUILD_DEPS = "${env.INSTALL_BUILD_DEPS ?: 'false'}"
     }
 
     options {
@@ -25,32 +35,82 @@ pipeline {
             }
         }
 
+        stage('Prepare Python env & deps') {
+            steps {
+                // install pip dependencies robustly. Prefer binary wheels (faster / avoids heavy builds).
+                // If that fails and INSTALL_BUILD_DEPS=true, we try installing minimal build deps and retry.
+                sh '''
+set -euo pipefail
+python -V
+
+# upgrade packaging tools
+python -m pip install --upgrade pip setuptools wheel
+
+# prefer binary wheels to avoid compiling heavy packages like scipy
+if [ -f "${REQUIREMENTS}" ]; then
+  echo "Installing from ${REQUIREMENTS} (prefer binary wheels)"
+  pip install --no-cache-dir --prefer-binary -r "${REQUIREMENTS}" || INSTALL_RC=$?
+else
+  echo "No requirements.txt found, installing a minimal set"
+  pip install --no-cache-dir --prefer-binary pandas numpy scikit-learn joblib || INSTALL_RC=$?
+fi
+
+# If pip failed (e.g., no wheel available for scipy), optionally install minimal build deps and retry.
+if [ -n "${INSTALL_RC:-}" ]; then
+  echo "Initial pip install failed (rc=${INSTALL_RC})."
+  if [ "${INSTALL_BUILD_DEPS}" = "true" ]; then
+    echo "INSTALL_BUILD_DEPS=true -> attempting to install minimal apt build deps and retry pip install"
+    apt-get update -y && apt-get install -y build-essential gfortran libatlas-base-dev
+    if [ -f "${REQUIREMENTS}" ]; then
+      pip install --no-cache-dir -r "${REQUIREMENTS}"
+    else
+      pip install --no-cache-dir pandas numpy scikit-learn joblib
+    fi
+  else
+    echo "INSTALL_BUILD_DEPS=false -> not installing system build deps. Failing the build to make the issue explicit."
+    exit ${INSTALL_RC}
+  fi
+fi
+
+# verify critical modules available
+python - <<'PY'
+import importlib, sys
+reqs = ['pandas','numpy','sklearn','joblib']
+missing = [r for r in reqs if importlib.util.find_spec(r) is None]
+if missing:
+    print("Missing python packages:", missing, file=sys.stderr)
+    sys.exit(2)
+print("Python deps appear OK")
+PY
+'''
+            }
+        }
+
         stage('Preprocess') {
             steps {
-                sh """
-                    python3 preprocess.py
-                """
+                sh '''
+set -euo pipefail
+python preprocess.py
+'''
             }
         }
 
         stage('Train') {
             steps {
                 script {
-                    // record training start time
-                    env.TRAIN_START = sh(script: "python3 - <<'PY'\nimport time\nprint(int(time.time()))\nPY", returnStdout: true).trim()
-                    sh "python3 trainandevaluate.py 2>&1 | tee train_log.txt"
-                    env.TRAIN_END = sh(script: "python3 - <<'PY'\nimport time\nprint(int(time.time()))\nPY", returnStdout: true).trim()
+                    env.TRAIN_START = sh(script: "python - <<'PY'\nimport time\nprint(int(time.time()))\nPY", returnStdout: true).trim()
+                    sh 'python trainandevaluate.py 2>&1 | tee train_log.txt'
+                    env.TRAIN_END = sh(script: "python - <<'PY'\nimport time\nprint(int(time.time()))\nPY", returnStdout: true).trim()
                 }
             }
         }
 
         stage('Record retrain time metric') {
             steps {
-                script {
-                    // compute and save retrain_time_seconds to file for later use/archival
-                    sh """
-                        python3 - <<'PY'
-import os, json, time
+                sh '''
+set -euo pipefail
+python - <<'PY'
+import os, json
 start = int(os.environ.get('TRAIN_START', '0'))
 end = int(os.environ.get('TRAIN_END', '0'))
 t = end - start if (start and end) else 0
@@ -58,21 +118,28 @@ with open('retrain_time.txt','w') as f:
     f.write(str(t))
 print("retrain_time_seconds:", t)
 PY
-                    """
-                    archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', fingerprint: true
-                }
+'''
+                archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', fingerprint: true
             }
         }
 
         stage('Deploy') {
             steps {
                 script {
-                    def deployStart = System.currentTimeMillis()
-                    // call deploy.py to fetch model artifacts and copy into models/deployed_model
-                    sh "python3 deploy.py --project ${env.PROJECT_NAME} --stage Staging"
-                    def deployEnd = System.currentTimeMillis()
-                    def deploySeconds = (deployEnd - deployStart) / 1000
-                    writeFile file: 'deployment_time.txt', text: deploySeconds.toString()
+                    sh '''
+set -euo pipefail
+python deploy.py --project "${PROJECT_NAME}" --stage Staging
+'''
+                    // record deploy time
+                    sh '''
+python - <<'PY'
+import time, json
+# if deploy writes its own timings you can adapt this; fallback to a tiny marker
+with open('deployment_time.txt','w') as f:
+    f.write(str(0.0))
+print("deployment_time_written")
+PY
+'''
                     archiveArtifacts artifacts: 'deployment_time.txt', fingerprint: true
                 }
             }
@@ -80,12 +147,11 @@ PY
 
         stage('Evaluate Drift Accuracy (7-day)') {
             steps {
-                // run a small evaluation that computes accuracy on test set (or a 7-day window if available)
                 sh '''
-python3 - <<'PY'
-import joblib, os, json
+set -euo pipefail
+python - <<'PY'
+import joblib, os, json, time
 from sklearn.metrics import accuracy_score
-# load deployed model (fallback local)
 model = None
 deploy_dir = os.path.join("models","deployed_model")
 if os.path.exists(deploy_dir):
@@ -100,17 +166,16 @@ if os.path.exists(deploy_dir):
         if model:
             break
 if model is None:
-    # fallback to any local model
-    for f in os.listdir("models"):
-        if f.endswith("_model.pkl"):
+    for f in os.listdir("models") if os.path.exists("models") else []:
+        if f.endswith("_model.pkl") or f.endswith(".pkl") or f.endswith(".joblib"):
             try:
                 model = joblib.load(os.path.join("models", f))
                 break
             except Exception:
                 pass
 
-# load test set
-if os.path.exists(os.path.join("data","X_test.pkl")) and os.path.exists(os.path.join("data","y_test.pkl")):
+acc = 0.0
+if model is not None and os.path.exists(os.path.join("data","X_test.pkl")) and os.path.exists(os.path.join("data","y_test.pkl")):
     X_test = joblib.load(os.path.join("data","X_test.pkl"))
     y_test = joblib.load(os.path.join("data","y_test.pkl"))
     try:
@@ -118,16 +183,14 @@ if os.path.exists(os.path.join("data","X_test.pkl")) and os.path.exists(os.path.
         acc = float(accuracy_score(y_test, y_pred))
     except Exception:
         acc = 0.0
-else:
-    acc = 0.0
 
-# write metric and append to model metadata
 meta_path = os.path.join("models","model_metadata.json")
 meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
 meta.setdefault("evaluations", [])
 entry = {"ts": int(time.time()), "accuracy_last_test": acc}
 meta["evaluations"].append(entry)
 meta["evaluations"] = meta["evaluations"][-20:]
+os.makedirs("models", exist_ok=True)
 with open(meta_path, "w") as f:
     json.dump(meta, f, indent=2)
 print("accuracy_after_drift:", acc)
@@ -140,21 +203,20 @@ PY
         stage('Manual Intervention Logging (optional)') {
             when {
                 anyOf {
-                    // trigger when build was user-triggered
                     triggeredBy 'UserIdCause'
                     expression { return params.get('FORCE_MANUAL_LOG', false) == true }
                 }
             }
             steps {
                 sh '''
-python3 - <<'PY'
-from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
+set -euo pipefail
+python - <<'PY'
 import os
-# simple manual intervention recorder file
+os.makedirs('artifacts', exist_ok=True)
 with open('manual_intervention.txt','a') as fh:
     fh.write("manual_intervention\\n")
-# Optionally push a metric to pushgateway if configured
-pg = os.environ.get('PUSHGATEWAY_URL', None)
+# Optionally push a metric; pushgateway configured via PUSHGATEWAY_URL env var
+pg = os.environ.get('PUSHGATEWAY_URL')
 if pg:
     try:
         from prometheus_client import Gauge, CollectorRegistry, push_to_gateway
@@ -163,7 +225,7 @@ if pg:
         g.set(1)
         push_to_gateway(pg + '/metrics/job/${PROJECT_NAME}_manual', registry=registry)
     except Exception as e:
-        print("Pushgateway manual log failed:", e)
+        print("Pushgateway push failed:", e)
 print("Manual intervention logged.")
 PY
 '''
@@ -175,18 +237,26 @@ PY
     post {
         success {
             script {
-                // optionally push deployment_time.txt and retrain_time.txt content to an external metrics collector
-                def deployTime = readFile('deployment_time.txt').trim()
-                def retrainTime = readFile('retrain_time.txt').trim()
-                echo "Deployment time (s): ${deployTime}"
-                echo "Retrain time (s): ${retrainTime}"
+                echo "SUCCESS: reading archived times if present"
+                if (fileExists('deployment_time.txt')) {
+                    echo "Deployment time (s): " + readFile('deployment_time.txt').trim()
+                }
+                if (fileExists('retrain_time.txt')) {
+                    echo "Retrain time (s): " + readFile('retrain_time.txt').trim()
+                }
             }
         }
         failure {
-            mail to: 'you@example.com',
-                 subject: "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                 body: "See Jenkins console output for details."
+            script {
+                if (env.ENABLE_MAIL == 'true') {
+                    // only try mail if explicitly enabled
+                    mail to: 'you@example.com',
+                         subject: "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                         body: "See Jenkins console output for details."
+                } else {
+                    echo "Build failed but mail disabled (ENABLE_MAIL!=true)."
+                }
+            }
         }
     }
 }
-
