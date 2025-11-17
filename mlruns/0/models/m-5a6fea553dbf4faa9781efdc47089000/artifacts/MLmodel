@@ -1,0 +1,22 @@
+artifact_path: /home/shreekar/mlops-agp/mlruns/0/models/m-5a6fea553dbf4faa9781efdc47089000/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.11.14
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.7.2
+mlflow_version: 3.5.1
+model_id: m-5a6fea553dbf4faa9781efdc47089000
+model_size_bytes: 1141334
+model_uuid: m-5a6fea553dbf4faa9781efdc47089000
+prompts: null
+run_id: 54450cbf6d4e4e519c4c6f4d1a2a9224
+utc_time_created: '2025-11-17 14:45:01.412433'

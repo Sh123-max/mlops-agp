@@ -1,10 +1,8 @@
 # trainandevaluate.py
 """
 Train multiple models, evaluate, perform Pareto-style selection (non-dominated),
-register best model with MLflow, write metadata, and push summary metrics to Pushgateway.
-
-Expected environment variables (with defaults):
-PROJECT_NAME, MLFLOW_TRACKING_URI, PUSHGATEWAY_URL, DATA_DIR, MODEL_DIR, NUM_WORKER_THREADS
+register best model with MLflow (from main thread after verifying artifacts),
+write metadata, and push summary metrics to Pushgateway.
 """
 
 import os
@@ -19,6 +17,8 @@ import mlflow.sklearn
 import requests
 import numpy as np
 import tempfile
+from mlflow.tracking import MlflowClient
+from time import sleep
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, StackingClassifier
@@ -34,7 +34,7 @@ MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL", "http://localhost:9091")
 DATA_DIR = os.getenv("DATA_DIR", "data")
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "models"))
-MODEL_DIR.mkdir(exist_ok=True)
+MODEL_DIR.mkdir(exist_ok=True, parents=True)
 
 # Resource/threading
 try:
@@ -52,6 +52,7 @@ weights = {'Accuracy':0.05,'Precision':0.05,'Recall':0.4,'F1-Score':0.3,'ROC-AUC
 
 # MLflow
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
 print("MLflow tracking URI:", mlflow.get_tracking_uri())
 print("NUM_WORKER_THREADS:", NUM_WORKER_THREADS)
 
@@ -106,7 +107,6 @@ def safe_roc_auc(y_true, y_score):
 
 def measure_latency(model, X_sample, n_runs=10):
     try:
-        # warmup
         for _ in range(2):
             _ = model.predict(X_sample)
         t0 = time.time()
@@ -127,10 +127,6 @@ def measure_model_size(model):
         return float(1e12)
 
 def nondominated_front(points):
-    """
-    Return indices of non-dominated points (minimization).
-    points: list of numeric lists (each objective to minimize)
-    """
     n = len(points)
     dominated = [False]*n
     for i in range(n):
@@ -139,11 +135,10 @@ def nondominated_front(points):
         for j in range(n):
             if i == j or dominated[j]:
                 continue
-            # j dominates i if j <= i for all and < for at least one
             all_leq = True
             strictly_less = False
             for a,b in zip(points[j], points[i]):
-                if b + 1e-12 < a:  # if i < j for some objective, then j not <= i
+                if b + 1e-12 < a:
                     all_leq = False
                     break
                 if a + 1e-12 < b:
@@ -155,9 +150,9 @@ def nondominated_front(points):
 
 def train_and_log(name, model):
     run_name = f"{PROJECT_NAME}__{name}__{int(time.time())}"
-    with mlflow.start_run(run_name=run_name) as run:
-        run_id = run.info.run_id
-        try:
+    try:
+        with mlflow.start_run(run_name=run_name) as run:
+            run_id = run.info.run_id
             print(f"[{name}] Training (run_id={run_id})")
             t0 = time.time()
             model.fit(X_train, y_train)
@@ -182,23 +177,20 @@ def train_and_log(name, model):
             f1 = f1_score(y_test, y_pred, zero_division=0)
             roc = safe_roc_auc(y_test, y_proba)
 
-            # confusion matrix for false negatives
             try:
                 tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
                 fn_rate = float(fn) / float(fn + tp) if (fn + tp) > 0 else 0.0
             except Exception:
                 fn_rate = 0.0
 
-            # latency and size
             sample_count = min(50, X_test.shape[0])
             X_sample = X_test[:sample_count]
             latency = measure_latency(model, X_sample, n_runs=10)
             model_size = measure_model_size(model)
 
-            # weighted score
             weighted = (weights['Accuracy']*acc + weights['Precision']*prec + weights['Recall']*rec + weights['F1-Score']*f1 + weights['ROC-AUC']*roc)
 
-            # MLflow logging
+            # Log metrics and params
             mlflow.log_param("model_name", name)
             mlflow.log_metric("accuracy", float(acc))
             mlflow.log_metric("precision", float(prec))
@@ -216,10 +208,16 @@ def train_and_log(name, model):
 
             try:
                 mlflow.sklearn.log_model(model, artifact_path="model")
+                # debug artifact uri (helps confirm upload)
+                try:
+                    artifact_uri = mlflow.get_artifact_uri("model")
+                    print(f"[{name}] logged artifact_uri={artifact_uri}")
+                except Exception as e:
+                    print(f"[{name}] warning getting artifact uri: {e}")
             except Exception as e:
-                print("mlflow log model failed:", e)
+                print(f"[{name}] mlflow log model failed:", e)
 
-            # Save local model (fallback)
+            # Save local model as fallback
             try:
                 local_fn = MODEL_DIR / f"{name}_model.pkl"
                 joblib.dump(model, local_fn)
@@ -241,16 +239,13 @@ def train_and_log(name, model):
                 "model_size": model_size,
                 "false_negative_rate": fn_rate
             }
-        except Exception as e:
-            print(f"[{name}] failed:", e)
-            traceback.print_exc()
-            mlflow.set_tag("training_status", "failed")
-            return {"name": name, "error": str(e)}
+    except Exception as e:
+        print(f"[{name}] failed:", e)
+        traceback.print_exc()
+        return {"name": name, "error": str(e)}
 
 # Run training in parallel (thread pool)
 results = []
-best = {"score": -1, "name": None, "run_id": None, "registry": None}
-
 with ThreadPoolExecutor(max_workers=NUM_WORKER_THREADS) as ex:
     futures = {ex.submit(train_and_log, n, m): n for n, m in models.items()}
     for fut in as_completed(futures):
@@ -259,57 +254,70 @@ with ThreadPoolExecutor(max_workers=NUM_WORKER_THREADS) as ex:
             res = fut.result()
             results.append(res)
             if "error" not in res:
-                score = float(res.get("weighted_score", -1))
-                # update best based on weighted_score as a quick filter
-                if score > best["score"]:
-                    run_id = res["run_id"]
-                    registry_name = f"{PROJECT_NAME}_{res['name']}"
-                    try:
-                        registered = mlflow.register_model(f"runs:/{run_id}/model", registry_name)
-                        best = {"score": score, "name": res['name'], "run_id": run_id, "registry": {"name": registry_name, "version": getattr(registered, "version", None)}}
-                    except Exception as e:
-                        print("Register failed:", e)
-                        best = {"score": score, "name": res['name'], "run_id": run_id, "registry": None}
+                print(f"[MAIN] Collected result for {name} weighted_score={res.get('weighted_score')}")
         except Exception as e:
             print("Future exception for", name, e)
 
-# Multi-objective selection using non-dominated sorting
-# Objectives (we want to maximize recall, precision, f1, roc; minimize latency & size & retrain time & fn_rate)
-# We'll transform maximize objectives by negation so we can treat all objectives as "minimize"
+# Multi-objective selection
+valid_results = [r for r in results if "error" not in r and r.get("run_id")]
 objs = []
-valid_results = [r for r in results if "error" not in r]
 for r in valid_results:
     vec = [
-        -float(r.get("recall", 0.0)),       # maximize -> minimize negative
+        -float(r.get("recall", 0.0)),
         -float(r.get("precision", 0.0)),
         -float(r.get("f1_score", 0.0)),
         -float(r.get("roc_auc", 0.0)),
-        float(r.get("latency", 1e6)),      # minimize latency
-        float(r.get("model_size", 1e12)),  # minimize size
-        float(r.get("retrain_time_seconds", 1e6)),  # minimize retrain time
-        float(r.get("false_negative_rate", 1.0))    # minimize FN rate
+        float(r.get("latency", 1e6)),
+        float(r.get("model_size", 1e12)),
+        float(r.get("retrain_time_seconds", 1e6)),
+        float(r.get("false_negative_rate", 1.0))
     ]
     objs.append(vec)
 
-pareto_indices = []
-if objs:
-    pareto_indices = nondominated_front(objs)
-    pareto_models = [valid_results[i] for i in pareto_indices]
-else:
-    pareto_models = []
+pareto_indices = nondominated_front(objs) if objs else []
+pareto_models = [valid_results[i] for i in pareto_indices] if pareto_indices else []
 
-# tie-breaker: healthcare priority (recall -> f1 -> roc_auc)
+best = {"score": -1, "name": None, "run_id": None, "registry": None}
 if pareto_models:
     pareto_models = sorted(pareto_models, key=lambda x: (x.get("recall",0), x.get("f1_score",0), x.get("roc_auc",0)), reverse=True)
     chosen = pareto_models[0]
     best = {"score": float(chosen.get("weighted_score", -1)), "name": chosen["name"], "run_id": chosen.get("run_id"), "registry": None}
-    # attempt to register chosen model name (if not already)
+else:
+    # fallback: best by weighted score
+    if valid_results:
+        chosen = max(valid_results, key=lambda r: float(r.get("weighted_score", -1)))
+        best = {"score": float(chosen.get("weighted_score", -1)), "name": chosen["name"], "run_id": chosen.get("run_id"), "registry": None}
+
+# Now register the best model from the main thread (with artifact availability check)
+if best.get("run_id") and best.get("name"):
+    run_id = best["run_id"]
+    registry_name = f"{PROJECT_NAME}_{best['name']}"
+    max_wait_sec = 30
+    poll_interval = 2
+    waited = 0
+    ok = False
+    print(f"[MAIN] Waiting up to {max_wait_sec}s for artifacts for run {run_id} before registering...")
+    while waited < max_wait_sec:
+        try:
+            arts = client.list_artifacts(run_id, path="model")
+            if arts and len(arts) > 0:
+                ok = True
+                break
+        except Exception as e:
+            print("[MAIN] list_artifacts error (will retry):", e)
+        sleep(poll_interval)
+        waited += poll_interval
+
+    if not ok:
+        print(f"[MAIN] Warning: artifacts for run {run_id} not found after {max_wait_sec}s. Attempting registration anyway (may point to models:/ without artifacts).")
+
     try:
-        registry_name = f"{PROJECT_NAME}_{chosen['name']}"
-        registered = mlflow.register_model(f"runs:/{chosen.get('run_id')}/model", registry_name)
+        print(f"[MAIN] Registering model runs:/{run_id}/model -> {registry_name}")
+        registered = mlflow.register_model(f"runs:/{run_id}/model", registry_name)
         best["registry"] = {"name": registry_name, "version": getattr(registered, "version", None)}
+        print("[MAIN] Registered model:", best["registry"])
     except Exception as e:
-        print("Registering chosen model failed:", e)
+        print("[MAIN] Register failed:", e)
 
 # summary
 summary = {
@@ -326,12 +334,7 @@ with open(MODEL_DIR / "last_run_summary.json", "w") as fh:
 print("Training complete. Best:", best)
 
 # Build model_metadata.json (baseline distributions + metrics)
-metadata = {
-    "project": PROJECT_NAME,
-    "best": best,
-    "results": results,
-    "generated_at": int(time.time())
-}
+metadata = {"project": PROJECT_NAME, "best": best, "results": results, "generated_at": int(time.time())}
 
 try:
     if X_train_unscaled_df is not None:
@@ -341,7 +344,6 @@ try:
         feature_means = {str(c): float(df[c].mean()) for c in feat_names}
         feature_stds = {str(c): float(df[c].std()) for c in feat_names}
     else:
-        # derive names as feat_0..N and use scaled data inverse-transform if scaler exists
         if scaler is not None:
             try:
                 X_train_unscaled = scaler.inverse_transform(X_train)
@@ -355,12 +357,7 @@ try:
         feature_means = {feat_names[i]: float(np.nanmean(X_train_unscaled[:, i])) for i in range(n_feats)}
         feature_stds = {feat_names[i]: float(np.nanstd(X_train_unscaled[:, i])) for i in range(n_feats)}
 
-    metadata["baseline"] = {
-        "feature_names": feat_names,
-        "feature_distributions": feature_distributions,
-        "feature_means": feature_means,
-        "feature_stds": feature_stds
-    }
+    metadata["baseline"] = {"feature_names": feat_names, "feature_distributions": feature_distributions, "feature_means": feature_means, "feature_stds": feature_stds}
 except Exception as e:
     print("Failed to compute baseline distributions:", e)
 
@@ -373,7 +370,6 @@ try:
             existing = json.load(open(meta_path))
         except Exception:
             existing = {}
-    # merge but do not overwrite critical keys unless new
     existing.update(metadata)
     with open(meta_path, "w") as fh:
         json.dump(existing, fh, indent=2)
@@ -386,7 +382,6 @@ if PUSHGATEWAY_URL and best.get("name"):
     try:
         payload_lines = []
         payload_lines.append(f'model_weighted_score{{project="{PROJECT_NAME}",model="{best["name"]}"}} {best["score"]}')
-        # include retrain time metric (best model retrain time if available)
         chosen_res = None
         for r in results:
             if r.get("name") == best.get("name"):
