@@ -28,69 +28,63 @@ pipeline {
         stage('Prepare Python env & deps (venv)') {
             steps {
                 sh '''
-bash -c '
+bash -lc "
 set -euo pipefail
 
-echo "NODE PYTHON PATH: $(which python3 || true)"
+echo \\"NODE PYTHON PATH: \$(which python3 || true)\\"
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 not found on this node. Please install python3 (and pip) or use a node that has it." >&2
+  echo \\"python3 not found on this node. Please install python3 (and pip) or use a node that has it.\\" >&2
   exit 3
 fi
 
-python3 -m venv "${VENV_DIR}"
-. "${VENV_DIR}/bin/activate"
+python3 -m venv \\"${VENV_DIR}\\"
+. \\"${VENV_DIR}/bin/activate\\"
 
 python -m pip install --upgrade pip setuptools wheel
 
-if [ -f "${REQUIREMENTS}" ]; then
-  echo "Installing from ${REQUIREMENTS} (preferring binary wheels)"
-  if pip install --no-cache-dir --prefer-binary -r "${REQUIREMENTS}"; then
-    echo "pip install succeeded"
+if [ -f \\"${REQUIREMENTS}\\" ]; then
+  echo \\"Installing from ${REQUIREMENTS} (preferring binary wheels)\\" 
+  if pip install --no-cache-dir --prefer-binary -r \\"${REQUIREMENTS}\\"; then
+    echo \\"pip install succeeded\\"
     INSTALLED_OK=1
   else
-    echo "pip install failed"
+    echo \\"pip install failed\\"
     INSTALLED_OK=0
   fi
 else
-  echo "No requirements.txt found; installing minimal runtime deps"
+  echo \\"No requirements.txt found; installing minimal runtime deps\\"
   if pip install --no-cache-dir --prefer-binary pandas numpy scikit-learn joblib prometheus_client prometheus-flask-exporter; then
-    echo "pip install succeeded (minimal set)"
+    echo \\"pip install succeeded (minimal set)\\"
     INSTALLED_OK=1
   else
-    echo "pip install failed (minimal set)"
+    echo \\"pip install failed (minimal set)\\"
     INSTALLED_OK=0
   fi
 fi
 
-if [ "${INSTALLED_OK}" -eq 0 ]; then
-  echo "Initial pip install failed."
-  if [ "${INSTALL_BUILD_DEPS}" = "true" ]; then
-    echo "INSTALL_BUILD_DEPS=true -> attempting to install system build deps and retry"
+if [ \\"${INSTALLED_OK}\\" -eq 0 ]; then
+  echo \\"Initial pip install failed.\\"
+  if [ \\"${INSTALL_BUILD_DEPS}\\" = \\"true\\" ]; then
+    echo \\"INSTALL_BUILD_DEPS=true -> attempting to install system build deps and retry\\"
     if command -v apt-get >/dev/null 2>&1; then
       apt-get update -y && apt-get install -y build-essential gfortran libatlas-base-dev
-      if [ -f "${REQUIREMENTS}" ]; then
-        pip install --no-cache-dir -r "${REQUIREMENTS}"
+      if [ -f \\"${REQUIREMENTS}\\" ]; then
+        pip install --no-cache-dir -r \\"${REQUIREMENTS}\\"
       else
         pip install --no-cache-dir pandas numpy scikit-learn joblib prometheus_client prometheus-flask-exporter
       fi
     else
-      echo "apt-get not available on this node; cannot install system build deps." >&2
+      echo \\"apt-get not available on this node; cannot install system build deps.\\" >&2
       exit 5
     fi
   else
-    echo "INSTALL_BUILD_DEPS is false -> not installing system build deps. Failing to keep pipeline light." >&2
+    echo \\"INSTALL_BUILD_DEPS is false -> not installing system build deps. Failing to keep pipeline light.\\" >&2
     exit 4
   fi
 fi
 
-# quick python check for essential packages
-python -c "import importlib,sys; reqs=[\'pandas\',\'numpy\',\'sklearn\',\'joblib\']; missing=[r for r in reqs if importlib.util.find_spec(r) is None]; \
-if missing: \
-    sys.stderr.write(\'Missing python packages: %s\\n\' % missing); \
-    sys.exit(6) \
-else: \
-    print(\'Python deps OK\')"
-'
+python -c \\"import importlib,sys; reqs=['pandas','numpy','sklearn','joblib']; missing=[r for r in reqs if importlib.util.find_spec(r) is None]; if missing: sys.stderr.write('Missing python packages: %s\\\\n' % missing); sys.exit(6); else: print('Python deps OK')\\"
+"
 '''
             }
         }
@@ -98,11 +92,11 @@ else: \
         stage('Preprocess') {
             steps {
                 sh '''
-bash -c '
+bash -lc "
 set -euo pipefail
-. "${VENV_DIR}/bin/activate"
+. \\"${VENV_DIR}/bin/activate\\"
 python preprocess.py
-'
+"
 '''
             }
         }
@@ -111,25 +105,25 @@ python preprocess.py
             steps {
                 script {
                     env.TRAIN_START = sh(script: '''
-bash -c '
-. "${VENV_DIR}/bin/activate"
-python -c "import time; print(int(time.time()))"
-'
+bash -lc "
+. \\"${VENV_DIR}/bin/activate\\"
+python -c \\"import time; print(int(time.time()))\\"
+"
 ''', returnStdout: true).trim()
                 }
                 sh '''
-bash -c '
+bash -lc "
 set -euo pipefail
-. "${VENV_DIR}/bin/activate"
+. \\"${VENV_DIR}/bin/activate\\"
 python trainandevaluate.py 2>&1 | tee train_log.txt
-'
+"
 '''
                 script {
                     env.TRAIN_END = sh(script: '''
-bash -c '
-. "${VENV_DIR}/bin/activate"
-python -c "import time; print(int(time.time()))"
-'
+bash -lc "
+. \\"${VENV_DIR}/bin/activate\\"
+python -c \\"import time; print(int(time.time()))\\"
+"
 ''', returnStdout: true).trim()
                 }
             }
@@ -138,18 +132,18 @@ python -c "import time; print(int(time.time()))"
         stage('Record retrain time metric') {
             steps {
                 sh '''
-bash -c '
+bash -lc "
 set -euo pipefail
-. "${VENV_DIR}/bin/activate"
-python -c "import os
-start = int(os.environ.get(\'TRAIN_START\', \'0\'))
-end = int(os.environ.get(\'TRAIN_END\', \'0\'))
+. \\"${VENV_DIR}/bin/activate\\"
+python -c \\"import os
+start = int(os.environ.get('TRAIN_START', '0'))
+end = int(os.environ.get('TRAIN_END', '0'))
 t = end - start if (start and end) else 0
-with open(\'retrain_time.txt\',\'w\') as f:
+with open('retrain_time.txt', 'w') as f:
     f.write(str(t))
-print(\'retrain_time_seconds:\', t)
+print('retrain_time_seconds:', t)
+\\"
 "
-'
 '''
                 archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', fingerprint: true
             }
@@ -158,14 +152,14 @@ print(\'retrain_time_seconds:\', t)
         stage('Deploy') {
             steps {
                 sh '''
-bash -c '
+bash -lc "
 set -euo pipefail
-. "${VENV_DIR}/bin/activate"
-python deploy.py --project "${PROJECT_NAME}" --stage Staging || true
+. \\"${VENV_DIR}/bin/activate\\"
+python deploy.py --project \\"${PROJECT_NAME}\\" --stage Staging || true
 if [ ! -f deployment_time.txt ]; then
   echo 0 > deployment_time.txt
 fi
-'
+"
 '''
                 archiveArtifacts artifacts: 'deployment_time.txt', fingerprint: true
             }
@@ -174,17 +168,17 @@ fi
         stage('Evaluate Drift Accuracy (7-day)') {
             steps {
                 sh '''
-bash -c '
+bash -lc "
 set -euo pipefail
-. "${VENV_DIR}/bin/activate"
-python -c "import joblib, os, json, time
+. \\"${VENV_DIR}/bin/activate\\"
+python -c \\"import joblib, os, json, time
 from sklearn.metrics import accuracy_score
 model = None
-deploy_dir = os.path.join(\'models\',\'deployed_model\')
+deploy_dir = os.path.join('models','deployed_model')
 if os.path.exists(deploy_dir):
     for root,_,files in os.walk(deploy_dir):
         for f in files:
-            if f.endswith((\'.pkl\', \'.joblib\')):
+            if f.endswith(('.pkl', '.joblib')):
                 try:
                     model = joblib.load(os.path.join(root,f))
                     break
@@ -192,37 +186,37 @@ if os.path.exists(deploy_dir):
                     pass
         if model:
             break
-if model is None and os.path.exists(\'models\'):
-    for f in os.listdir(\'models\'):
-        if f.endswith((\'_model.pkl\', \'.pkl\', \'.joblib\')):
+if model is None and os.path.exists('models'):
+    for f in os.listdir('models'):
+        if f.endswith(('_model.pkl', '.pkl', '.joblib')):
             try:
-                model = joblib.load(os.path.join(\'models\', f))
+                model = joblib.load(os.path.join('models', f))
                 break
             except Exception:
                 pass
 
 acc = 0.0
-if model is not None and os.path.exists(os.path.join(\'data\',\'X_test.pkl\')) and os.path.exists(os.path.join(\'data\',\'y_test.pkl\')):
-    X_test = joblib.load(os.path.join(\'data\',\'X_test.pkl\'))
-    y_test = joblib.load(os.path.join(\'data\',\'y_test.pkl\'))
+if model is not None and os.path.exists(os.path.join('data','X_test.pkl')) and os.path.exists(os.path.join('data','y_test.pkl')):
+    X_test = joblib.load(os.path.join('data','X_test.pkl'))
+    y_test = joblib.load(os.path.join('data','y_test.pkl'))
     try:
         y_pred = model.predict(X_test)
         acc = float(accuracy_score(y_test, y_pred))
     except Exception:
         acc = 0.0
 
-meta_path = os.path.join(\'models\',\'model_metadata.json\')
+meta_path = os.path.join('models','model_metadata.json')
 meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
-meta.setdefault(\'evaluations\', [])
-entry = {\'ts\': int(time.time()), \'accuracy_last_test\': acc}
-meta[\'evaluations\'].append(entry)
-meta[\'evaluations\'] = meta[\'evaluations\'][-20:]
-os.makedirs(\'models\', exist_ok=True)
-with open(meta_path, \'w\') as f:
+meta.setdefault('evaluations', [])
+entry = {'ts': int(time.time()), 'accuracy_last_test': acc}
+meta['evaluations'].append(entry)
+meta['evaluations'] = meta['evaluations'][-20:]
+os.makedirs('models', exist_ok=True)
+with open(meta_path, 'w') as f:
     json.dump(meta, f, indent=2)
-print(\'accuracy_after_drift:\', acc)
+print('accuracy_after_drift:', acc)
+\\"
 "
-'
 '''
                 archiveArtifacts artifacts: 'models/model_metadata.json', fingerprint: true
             }
@@ -237,25 +231,25 @@ print(\'accuracy_after_drift:\', acc)
             }
             steps {
                 sh '''
-bash -c '
+bash -lc "
 set -euo pipefail
-. "${VENV_DIR}/bin/activate"
-python -c "import os
-with open(\'manual_intervention.txt\',\'a\') as fh:
-    fh.write(\'manual_intervention\\n\')
-pg = os.environ.get(\'PUSHGATEWAY_URL\')
+. \\"${VENV_DIR}/bin/activate\\"
+python -c \\"import os
+with open('manual_intervention.txt','a') as fh:
+    fh.write('manual_intervention\\\\n')
+pg = os.environ.get('PUSHGATEWAY_URL')
 if pg:
     try:
         from prometheus_client import Gauge, CollectorRegistry, push_to_gateway
         registry = CollectorRegistry()
-        g = Gauge(\'manual_intervention_count\', \'Manual interventions count\', registry=registry)
+        g = Gauge('manual_intervention_count', 'Manual interventions count', registry=registry)
         g.set(1)
-        push_to_gateway(pg + \'/metrics/job/${PROJECT_NAME}_manual\', registry=registry)
+        push_to_gateway(pg + '/metrics/job/${PROJECT_NAME}_manual', registry=registry)
     except Exception as e:
-        print(\'Pushgateway push failed:\', e)
-print(\'Manual intervention logged.\')
+        print('Pushgateway push failed:', e)
+print('Manual intervention logged.')
+\\"
 "
-'
 '''
                 archiveArtifacts artifacts: 'manual_intervention.txt', fingerprint: true
             }
