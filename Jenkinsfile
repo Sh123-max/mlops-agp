@@ -21,6 +21,11 @@ pipeline {
                 checkout scm
             }
         }
+    stage('Clean Virtual Environment') {
+    steps {
+        sh 'rm -rf venv'
+    }
+}
 
         stage('Setup Environment') {
             steps {
