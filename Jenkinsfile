@@ -26,9 +26,9 @@ pipeline {
         }
 
         stage('Prepare Python env & deps (venv)') {
-            steps {
-                sh '''
-#!/usr/bin/env bash
+    steps {
+        // triple-single quotes -> Groovy won't interpolate $ or ${}
+        sh(''' 
 set -euo pipefail
 
 echo "NODE PYTHON PATH: $(which python3 || true)"
@@ -84,17 +84,15 @@ if [ "${INSTALLED_OK}" -eq 0 ]; then
 fi
 
 # quick python check for essential packages
-python -c "
-import importlib,sys; reqs=['pandas','numpy','sklearn','joblib']; missing=[r for r in reqs if importlib.util.find_spec(r) is None];
-if missing:
-    sys.stderr.write('Missing python packages: %s\\n' % missing);
-    sys.exit(6)
-else:
-    print('Python deps OK')
-"
-'''
-            }
-        }
+python -c "import importlib,sys; reqs=['pandas','numpy','sklearn','joblib']; missing=[r for r in reqs if importlib.util.find_spec(r) is None]; \
+if missing: \
+    sys.stderr.write('Missing python packages: %s\\n' % missing); \
+    sys.exit(6); \
+else: \
+    print('Python deps OK')"
+''')
+    }
+}
 
         stage('Preprocess') {
             steps {
