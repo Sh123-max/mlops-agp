@@ -10,7 +10,6 @@ pipeline {
         ENABLE_MAIL  = "${env.ENABLE_MAIL ?: 'false'}"
         INSTALL_BUILD_DEPS = "${env.INSTALL_BUILD_DEPS ?: 'false'}"
         VENV_DIR     = "${env.VENV_DIR ?: '.venv'}"
-        # Optional: set PYTHONUNBUFFERED=1 to make logs live
         PYTHONUNBUFFERED = "1"
     }
 
@@ -29,7 +28,6 @@ pipeline {
 
         stage('Prepare Python env & deps (venv)') {
             steps {
-                // Use bash -s with a quoted heredoc so bash receives exact script via stdin.
                 sh('''bash -s <<'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -79,7 +77,6 @@ if [ "${INSTALLED_OK}" -eq 0 ]; then
     if command -v apt-get >/dev/null 2>&1; then
       apt-get update -y
       apt-get install -y build-essential gfortran libatlas-base-dev libopenblas-dev liblapack-dev python3-dev pkg-config
-      # After system deps, retry
       if [ -f "${REQUIREMENTS}" ]; then
         pip install --no-cache-dir -r "${REQUIREMENTS}"
       else
@@ -102,7 +99,7 @@ import importlib, sys
 reqs = ['pandas','numpy','sklearn','joblib']
 missing = [r for r in reqs if importlib.util.find_spec(r) is None]
 if missing:
-    sys.stderr.write('Missing python packages: %s\\n' % missing)
+    sys.stderr.write('Missing python packages: %s\n' % missing)
     sys.exit(6)
 else:
     print('Python deps OK')
@@ -286,7 +283,7 @@ set -euo pipefail
 python - <<'PY'
 import os
 with open('manual_intervention.txt','a') as fh:
-    fh.write('manual_intervention\\n')
+    fh.write('manual_intervention\n')
 pg = os.environ.get('PUSHGATEWAY_URL')
 if pg:
     try:
