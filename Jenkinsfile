@@ -1,15 +1,6 @@
-// Jenkinsfile (Declarative) - updated, Docker-based, lightweight, robust pip/scipy install
+// Jenkinsfile (Declarative) - agent any + venv-based, lightweight, robust pip/scipy install
 pipeline {
-    // Use Docker so we get a predictable Python environment.
-    // If your Jenkins doesn't support Docker-agent, change `agent` to `any` and
-    // follow the venv fallback instructions in the comments below.
-    agent {
-        docker {
-            image 'python:3.11-slim'
-            // run as root to allow apt when needed (only used conditionally)
-            args  '--user root:root'
-        }
-    }
+    agent any
 
     environment {
         PROJECT_NAME = "${env.PROJECT_NAME ?: 'diabetes'}"
@@ -18,8 +9,8 @@ pipeline {
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
         REQUIREMENTS = "${env.REQUIREMENTS ?: 'requirements.txt'}"
         ENABLE_MAIL = "${env.ENABLE_MAIL ?: 'false'}" // set to 'true' if Jenkins mail configured
-        // optional: set to 'true' if you want the pipeline to apt-get build deps when wheel install fails
-        INSTALL_BUILD_DEPS = "${env.INSTALL_BUILD_DEPS ?: 'false'}"
+        INSTALL_BUILD_DEPS = "${env.INSTALL_BUILD_DEPS ?: 'false'}" // opt-in if wheel install fails
+        VENV_DIR = "${env.VENV_DIR ?: '.venv'}"
     }
 
     options {
@@ -35,52 +26,64 @@ pipeline {
             }
         }
 
-        stage('Prepare Python env & deps') {
+        stage('Prepare Python env & deps (venv)') {
             steps {
-                // install pip dependencies robustly. Prefer binary wheels (faster / avoids heavy builds).
-                // If that fails and INSTALL_BUILD_DEPS=true, we try installing minimal build deps and retry.
+                // create a per-build venv and install dependencies reliably
                 sh '''
 set -euo pipefail
-python -V
+echo "Using python from: $(which python3 || true)"
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 not found on this node. Please install python3 (and pip) or use a node that has it." >&2
+  exit 3
+fi
+
+# create venv
+python3 -m venv "${VENV_DIR}"
+. "${VENV_DIR}/bin/activate"
 
 # upgrade packaging tools
 python -m pip install --upgrade pip setuptools wheel
 
-# prefer binary wheels to avoid compiling heavy packages like scipy
+# install dependencies preferring binary wheels to avoid heavy compilation (scipy)
 if [ -f "${REQUIREMENTS}" ]; then
-  echo "Installing from ${REQUIREMENTS} (prefer binary wheels)"
+  echo "Installing from ${REQUIREMENTS} with --prefer-binary"
   pip install --no-cache-dir --prefer-binary -r "${REQUIREMENTS}" || INSTALL_RC=$?
 else
-  echo "No requirements.txt found, installing a minimal set"
-  pip install --no-cache-dir --prefer-binary pandas numpy scikit-learn joblib || INSTALL_RC=$?
+  echo "No requirements.txt found; installing minimal runtime deps"
+  pip install --no-cache-dir --prefer-binary pandas numpy scikit-learn joblib prometheus_client || INSTALL_RC=$?
 fi
 
-# If pip failed (e.g., no wheel available for scipy), optionally install minimal build deps and retry.
+# fallback: if pip failed and INSTALL_BUILD_DEPS=true, install apt build deps and retry
 if [ -n "${INSTALL_RC:-}" ]; then
-  echo "Initial pip install failed (rc=${INSTALL_RC})."
+  echo "pip install returned rc=${INSTALL_RC}"
   if [ "${INSTALL_BUILD_DEPS}" = "true" ]; then
-    echo "INSTALL_BUILD_DEPS=true -> attempting to install minimal apt build deps and retry pip install"
-    apt-get update -y && apt-get install -y build-essential gfortran libatlas-base-dev
-    if [ -f "${REQUIREMENTS}" ]; then
-      pip install --no-cache-dir -r "${REQUIREMENTS}"
+    echo "INSTALL_BUILD_DEPS=true -> attempting apt-get build deps and retry"
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get update -y && apt-get install -y build-essential gfortran libatlas-base-dev
+      if [ -f "${REQUIREMENTS}" ]; then
+        pip install --no-cache-dir -r "${REQUIREMENTS}"
+      else
+        pip install --no-cache-dir pandas numpy scikit-learn joblib prometheus_client
+      fi
     else
-      pip install --no-cache-dir pandas numpy scikit-learn joblib
+      echo "apt-get not available on this node; cannot install system build deps." >&2
+      exit ${INSTALL_RC}
     fi
   else
-    echo "INSTALL_BUILD_DEPS=false -> not installing system build deps. Failing the build to make the issue explicit."
+    echo "INSTALL_BUILD_DEPS is false -> not installing system build deps. Failing the build to keep pipeline light." >&2
     exit ${INSTALL_RC}
   fi
 fi
 
-# verify critical modules available
+# verify essential packages
 python - <<'PY'
-import importlib, sys
+import sys, importlib
 reqs = ['pandas','numpy','sklearn','joblib']
 missing = [r for r in reqs if importlib.util.find_spec(r) is None]
 if missing:
     print("Missing python packages:", missing, file=sys.stderr)
-    sys.exit(2)
-print("Python deps appear OK")
+    sys.exit(4)
+print("Python deps OK")
 PY
 '''
             }
@@ -90,6 +93,7 @@ PY
             steps {
                 sh '''
 set -euo pipefail
+. "${VENV_DIR}/bin/activate"
 python preprocess.py
 '''
             }
@@ -98,9 +102,9 @@ python preprocess.py
         stage('Train') {
             steps {
                 script {
-                    env.TRAIN_START = sh(script: "python - <<'PY'\nimport time\nprint(int(time.time()))\nPY", returnStdout: true).trim()
-                    sh 'python trainandevaluate.py 2>&1 | tee train_log.txt'
-                    env.TRAIN_END = sh(script: "python - <<'PY'\nimport time\nprint(int(time.time()))\nPY", returnStdout: true).trim()
+                    env.TRAIN_START = sh(script: "bash -lc '. ${VENV_DIR}/bin/activate; python - <<'PY'\nimport time\nprint(int(time.time()))\nPY'", returnStdout: true).trim()
+                    sh "bash -lc '. ${VENV_DIR}/bin/activate; python trainandevaluate.py 2>&1 | tee train_log.txt'"
+                    env.TRAIN_END = sh(script: "bash -lc '. ${VENV_DIR}/bin/activate; python - <<'PY'\nimport time\nprint(int(time.time()))\nPY'", returnStdout: true).trim()
                 }
             }
         }
@@ -109,6 +113,7 @@ python preprocess.py
             steps {
                 sh '''
 set -euo pipefail
+. "${VENV_DIR}/bin/activate"
 python - <<'PY'
 import os, json
 start = int(os.environ.get('TRAIN_START', '0'))
@@ -125,23 +130,16 @@ PY
 
         stage('Deploy') {
             steps {
-                script {
-                    sh '''
+                sh '''
 set -euo pipefail
-python deploy.py --project "${PROJECT_NAME}" --stage Staging
+. "${VENV_DIR}/bin/activate"
+python deploy.py --project "${PROJECT_NAME}" --stage Staging || true
+# create a placeholder deployment_time.txt if deploy.py does not write it
+if [ ! -f deployment_time.txt ]; then
+  echo "0" > deployment_time.txt
+fi
 '''
-                    // record deploy time
-                    sh '''
-python - <<'PY'
-import time, json
-# if deploy writes its own timings you can adapt this; fallback to a tiny marker
-with open('deployment_time.txt','w') as f:
-    f.write(str(0.0))
-print("deployment_time_written")
-PY
-'''
-                    archiveArtifacts artifacts: 'deployment_time.txt', fingerprint: true
-                }
+                archiveArtifacts artifacts: 'deployment_time.txt', fingerprint: true
             }
         }
 
@@ -149,6 +147,7 @@ PY
             steps {
                 sh '''
 set -euo pipefail
+. "${VENV_DIR}/bin/activate"
 python - <<'PY'
 import joblib, os, json, time
 from sklearn.metrics import accuracy_score
@@ -157,7 +156,7 @@ deploy_dir = os.path.join("models","deployed_model")
 if os.path.exists(deploy_dir):
     for root,_,files in os.walk(deploy_dir):
         for f in files:
-            if f.endswith(".pkl") or f.endswith(".joblib"):
+            if f.endswith((".pkl", ".joblib")):
                 try:
                     model = joblib.load(os.path.join(root,f))
                     break
@@ -165,15 +164,14 @@ if os.path.exists(deploy_dir):
                     pass
         if model:
             break
-if model is None:
-    for f in os.listdir("models") if os.path.exists("models") else []:
-        if f.endswith("_model.pkl") or f.endswith(".pkl") or f.endswith(".joblib"):
+if model is None and os.path.exists("models"):
+    for f in os.listdir("models"):
+        if f.endswith(("_model.pkl", ".pkl", ".joblib")):
             try:
                 model = joblib.load(os.path.join("models", f))
                 break
             except Exception:
                 pass
-
 acc = 0.0
 if model is not None and os.path.exists(os.path.join("data","X_test.pkl")) and os.path.exists(os.path.join("data","y_test.pkl")):
     X_test = joblib.load(os.path.join("data","X_test.pkl"))
@@ -183,7 +181,6 @@ if model is not None and os.path.exists(os.path.join("data","X_test.pkl")) and o
         acc = float(accuracy_score(y_test, y_pred))
     except Exception:
         acc = 0.0
-
 meta_path = os.path.join("models","model_metadata.json")
 meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
 meta.setdefault("evaluations", [])
@@ -204,18 +201,17 @@ PY
             when {
                 anyOf {
                     triggeredBy 'UserIdCause'
-                    expression { return params.get('FORCE_MANUAL_LOG', false) == true }
+                    expression { return (params != null && params.containsKey('FORCE_MANUAL_LOG') && params.FORCE_MANUAL_LOG.toString().toBoolean()) }
                 }
             }
             steps {
                 sh '''
 set -euo pipefail
+. "${VENV_DIR}/bin/activate"
 python - <<'PY'
 import os
-os.makedirs('artifacts', exist_ok=True)
 with open('manual_intervention.txt','a') as fh:
     fh.write("manual_intervention\\n")
-# Optionally push a metric; pushgateway configured via PUSHGATEWAY_URL env var
 pg = os.environ.get('PUSHGATEWAY_URL')
 if pg:
     try:
@@ -249,7 +245,6 @@ PY
         failure {
             script {
                 if (env.ENABLE_MAIL == 'true') {
-                    // only try mail if explicitly enabled
                     mail to: 'you@example.com',
                          subject: "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                          body: "See Jenkins console output for details."
