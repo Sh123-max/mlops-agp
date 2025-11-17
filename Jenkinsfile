@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        # Virtual environment inside workspace (no permission issues)
+        // Virtual environment inside workspace (no permission issues)
         VENV = "${WORKSPACE}/venv"
     }
 
