@@ -1,4 +1,4 @@
-// Jenkinsfile (Declarative) - agent any + venv-based, bash -lc used for bashisms/pipefail
+// Jenkinsfile (Declarative) - quote-safe version
 pipeline {
     agent any
 
@@ -6,11 +6,10 @@ pipeline {
         PROJECT_NAME = "${env.PROJECT_NAME ?: 'diabetes'}"
         DATA_DIR = "${env.DATA_DIR ?: 'data'}"
         MODEL_DIR = "${env.MODEL_DIR ?: 'models'}"
-        // Remove or override if you don't use MLflow
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
         REQUIREMENTS = "${env.REQUIREMENTS ?: 'requirements.txt'}"
-        ENABLE_MAIL = "${env.ENABLE_MAIL ?: 'false'}" // set to 'true' when SMTP configured
-        INSTALL_BUILD_DEPS = "${env.INSTALL_BUILD_DEPS ?: 'false'}" // opt-in to install apt build deps
+        ENABLE_MAIL = "${env.ENABLE_MAIL ?: 'false'}"
+        INSTALL_BUILD_DEPS = "${env.INSTALL_BUILD_DEPS ?: 'false'}"
         VENV_DIR = "${env.VENV_DIR ?: '.venv'}"
     }
 
@@ -29,8 +28,7 @@ pipeline {
 
         stage('Prepare Python env & deps (venv)') {
             steps {
-                // Use bash -lc so set -o pipefail and other bash features are supported on nodes with dash
-                sh '''bash -lc '
+                sh(script: """bash -lc <<'BASH'
 set -euo pipefail
 
 echo "NODE PYTHON PATH: $(which python3 || true)"
@@ -86,44 +84,60 @@ if [ "${INSTALLED_OK}" -eq 0 ]; then
 fi
 
 # quick python check for essential packages
-python -c "import importlib,sys; reqs=['pandas','numpy','sklearn','joblib']; missing=[r for r in reqs if importlib.util.find_spec(r) is None]; 
-if missing: 
-    sys.stderr.write('Missing python packages: %s\\n' % missing); 
-    sys.exit(6)
-else:
+python -c "import importlib,sys; reqs=['pandas','numpy','sklearn','joblib']; missing=[r for r in reqs if importlib.util.find_spec(r) is None]; \
+if missing: \
+    sys.stderr.write('Missing python packages: %s\\n' % missing); \
+    sys.exit(6); \
+else: \
     print('Python deps OK')"
-
-'''
+BASH
+""")
             }
         }
 
         stage('Preprocess') {
             steps {
-                sh '''bash -lc '
+                sh(script: """bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
 python preprocess.py
-' '''
+BASH
+""")
             }
         }
 
         stage('Train') {
             steps {
                 script {
-                    env.TRAIN_START = sh(script: "bash -lc '. \"${VENV_DIR}/bin/activate\"; python - <<'PY'\nimport time; print(int(time.time()))\nPY'", returnStdout: true).trim()
-                    sh '''bash -lc '
+                    env.TRAIN_START = sh(script: """bash -lc <<'BASH'
+. "${VENV_DIR}/bin/activate"
+python - <<'PY'
+import time
+print(int(time.time()))
+PY
+BASH
+""", returnStdout: true).trim()
+                    sh(script: """bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
 python trainandevaluate.py 2>&1 | tee train_log.txt
-' '''
-                    env.TRAIN_END = sh(script: "bash -lc '. \"${VENV_DIR}/bin/activate\"; python - <<'PY'\nimport time; print(int(time.time()))\nPY'", returnStdout: true).trim()
+BASH
+""")
+                    env.TRAIN_END = sh(script: """bash -lc <<'BASH'
+. "${VENV_DIR}/bin/activate"
+python - <<'PY'
+import time
+print(int(time.time()))
+PY
+BASH
+""", returnStdout: true).trim()
                 }
             }
         }
 
         stage('Record retrain time metric') {
             steps {
-                sh '''bash -lc '
+                sh(script: """bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
 python - <<'PY'
@@ -135,28 +149,30 @@ with open("retrain_time.txt","w") as f:
     f.write(str(t))
 print("retrain_time_seconds:", t)
 PY
-' '''
+BASH
+""")
                 archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', fingerprint: true
             }
         }
 
         stage('Deploy') {
             steps {
-                sh '''bash -lc '
+                sh(script: """bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
 python deploy.py --project "${PROJECT_NAME}" --stage Staging || true
 if [ ! -f deployment_time.txt ]; then
   echo 0 > deployment_time.txt
 fi
-' '''
+BASH
+""")
                 archiveArtifacts artifacts: 'deployment_time.txt', fingerprint: true
             }
         }
 
         stage('Evaluate Drift Accuracy (7-day)') {
             steps {
-                sh '''bash -lc '
+                sh(script: """bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
 python - <<'PY'
@@ -205,7 +221,8 @@ with open(meta_path, "w") as f:
     json.dump(meta, f, indent=2)
 print("accuracy_after_drift:", acc)
 PY
-' '''
+BASH
+""")
                 archiveArtifacts artifacts: 'models/model_metadata.json', fingerprint: true
             }
         }
@@ -218,7 +235,7 @@ PY
                 }
             }
             steps {
-                sh '''bash -lc '
+                sh(script: """bash -lc <<'BASH'
 set -euo pipefail
 . "${VENV_DIR}/bin/activate"
 python - <<'PY'
@@ -237,7 +254,8 @@ if pg:
         print("Pushgateway push failed:", e)
 print("Manual intervention logged.")
 PY
-' '''
+BASH
+""")
                 archiveArtifacts artifacts: 'manual_intervention.txt', fingerprint: true
             }
         }
