@@ -25,65 +25,96 @@ pipeline {
             }
         }
 
+        // ---------- UPDATED PREPARE STAGE (handles SciPy build issues + robust python check) ----------
         stage('Prepare Python env & deps (venv)') {
             steps {
                 sh '''
 bash -lc "
 set -euo pipefail
 
-echo \\"NODE PYTHON PATH: \$(which python3 || true)\\"
+echo \"NODE PYTHON PATH: $(which python3 || true)\"
 if ! command -v python3 >/dev/null 2>&1; then
-  echo \\"python3 not found on this node. Please install python3 (and pip) or use a node that has it.\\" >&2
+  echo \"python3 not found on this node. Please install python3 (and pip) or use a node that has it.\" >&2
   exit 3
 fi
 
-python3 -m venv \\"${VENV_DIR}\\"
-. \\"${VENV_DIR}/bin/activate\\"
+python3 -m venv \"${VENV_DIR}\"
+. \"${VENV_DIR}/bin/activate\"
 
+# Ensure pip/setuptools/wheel are up-to-date
 python -m pip install --upgrade pip setuptools wheel
 
-if [ -f \\"${REQUIREMENTS}\\" ]; then
-  echo \\"Installing from ${REQUIREMENTS} (preferring binary wheels)\\" 
-  if pip install --no-cache-dir --prefer-binary -r \\"${REQUIREMENTS}\\"; then
-    echo \\"pip install succeeded\\"
+# Initialize installed flag
+INSTALLED_OK=0
+
+# Install numpy first to maximize chance of using binary wheels for scipy
+echo \"Installing numpy (binary wheel preferred)\"
+if pip install --no-cache-dir --prefer-binary numpy; then
+  echo \"numpy installed\"
+else
+  echo \"numpy install failed; continuing to attempt requirements installation\"
+fi
+
+# Attempt to install full requirements (prefer binary wheels)
+if [ -f \"${REQUIREMENTS}\" ]; then
+  echo \"Installing from ${REQUIREMENTS} (preferring binary wheels)\"
+  if pip install --no-cache-dir --prefer-binary -r \"${REQUIREMENTS}\"; then
+    echo \"pip install succeeded\"
     INSTALLED_OK=1
   else
-    echo \\"pip install failed\\"
+    echo \"pip install failed\"
     INSTALLED_OK=0
   fi
 else
-  echo \\"No requirements.txt found; installing minimal runtime deps\\"
+  echo \"No requirements.txt found; installing minimal runtime deps\"
   if pip install --no-cache-dir --prefer-binary pandas numpy scikit-learn joblib prometheus_client prometheus-flask-exporter; then
-    echo \\"pip install succeeded (minimal set)\\"
+    echo \"pip install succeeded (minimal set)\"
     INSTALLED_OK=1
   else
-    echo \\"pip install failed (minimal set)\\"
+    echo \"pip install failed (minimal set)\"
     INSTALLED_OK=0
   fi
 fi
 
-if [ \\"${INSTALLED_OK}\\" -eq 0 ]; then
-  echo \\"Initial pip install failed.\\"
-  if [ \\"${INSTALL_BUILD_DEPS}\\" = \\"true\\" ]; then
-    echo \\"INSTALL_BUILD_DEPS=true -> attempting to install system build deps and retry\\"
+# If install failed and we are allowed to install system deps, try that and retry pip install
+if [ \"${INSTALLED_OK}\" -eq 0 ]; then
+  echo \"Initial pip install failed.\"
+  if [ \"${INSTALL_BUILD_DEPS}\" = \"true\" ]; then
+    echo \"INSTALL_BUILD_DEPS=true -> attempting to install system build deps and retry\"
     if command -v apt-get >/dev/null 2>&1; then
-      apt-get update -y && apt-get install -y build-essential gfortran libatlas-base-dev
-      if [ -f \\"${REQUIREMENTS}\\" ]; then
-        pip install --no-cache-dir -r \\"${REQUIREMENTS}\\"
+      # These packages help compile SciPy and other numeric libs if wheel is unavailable
+      apt-get update -y
+      apt-get install -y build-essential gfortran libatlas-base-dev libopenblas-dev liblapack-dev python3-dev pkg-config
+      # retry install
+      if [ -f \"${REQUIREMENTS}\" ]; then
+        pip install --no-cache-dir -r \"${REQUIREMENTS}\"
       else
         pip install --no-cache-dir pandas numpy scikit-learn joblib prometheus_client prometheus-flask-exporter
       fi
+      # if pip didn't error above, consider it success (shell -e will exit on pip error)
+      INSTALLED_OK=1
     else
-      echo \\"apt-get not available on this node; cannot install system build deps.\\" >&2
+      echo \"apt-get not available on this node; cannot install system build deps.\" >&2
       exit 5
     fi
   else
-    echo \\"INSTALL_BUILD_DEPS is false -> not installing system build deps. Failing to keep pipeline light.\\" >&2
+    echo \"INSTALL_BUILD_DEPS is false -> not installing system build deps. Failing to keep pipeline light.\" >&2
     exit 4
   fi
 fi
 
-python -c \\"import importlib,sys; reqs=['pandas','numpy','sklearn','joblib']; missing=[r for r in reqs if importlib.util.find_spec(r) is None]; if missing: sys.stderr.write('Missing python packages: %s\\\\n' % missing); sys.exit(6); else: print('Python deps OK')\\"
+# robust python dependency check (multi-line python to avoid one-liner syntax issues)
+python - <<'PY'
+import importlib, sys
+reqs = ['pandas','numpy','sklearn','joblib']
+missing = [r for r in reqs if importlib.util.find_spec(r) is None]
+if missing:
+    sys.stderr.write('Missing python packages: %s\\n' % missing)
+    sys.exit(6)
+else:
+    print('Python deps OK')
+PY
+
 "
 '''
             }
@@ -94,7 +125,7 @@ python -c \\"import importlib,sys; reqs=['pandas','numpy','sklearn','joblib']; m
                 sh '''
 bash -lc "
 set -euo pipefail
-. \\"${VENV_DIR}/bin/activate\\"
+. \"${VENV_DIR}/bin/activate\"
 python preprocess.py
 "
 '''
@@ -106,23 +137,23 @@ python preprocess.py
                 script {
                     env.TRAIN_START = sh(script: '''
 bash -lc "
-. \\"${VENV_DIR}/bin/activate\\"
-python -c \\"import time; print(int(time.time()))\\"
+. \"${VENV_DIR}/bin/activate\"
+python -c \"import time; print(int(time.time()))\"
 "
 ''', returnStdout: true).trim()
                 }
                 sh '''
 bash -lc "
 set -euo pipefail
-. \\"${VENV_DIR}/bin/activate\\"
+. \"${VENV_DIR}/bin/activate\"
 python trainandevaluate.py 2>&1 | tee train_log.txt
 "
 '''
                 script {
                     env.TRAIN_END = sh(script: '''
 bash -lc "
-. \\"${VENV_DIR}/bin/activate\\"
-python -c \\"import time; print(int(time.time()))\\"
+. \"${VENV_DIR}/bin/activate\"
+python -c \"import time; print(int(time.time()))\"
 "
 ''', returnStdout: true).trim()
                 }
@@ -134,15 +165,16 @@ python -c \\"import time; print(int(time.time()))\\"
                 sh '''
 bash -lc "
 set -euo pipefail
-. \\"${VENV_DIR}/bin/activate\\"
-python -c \\"import os
+. \"${VENV_DIR}/bin/activate\"
+python - <<'PY'
+import os
 start = int(os.environ.get('TRAIN_START', '0'))
 end = int(os.environ.get('TRAIN_END', '0'))
 t = end - start if (start and end) else 0
 with open('retrain_time.txt', 'w') as f:
     f.write(str(t))
 print('retrain_time_seconds:', t)
-\\"
+PY
 "
 '''
                 archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', fingerprint: true
@@ -154,8 +186,8 @@ print('retrain_time_seconds:', t)
                 sh '''
 bash -lc "
 set -euo pipefail
-. \\"${VENV_DIR}/bin/activate\\"
-python deploy.py --project \\"${PROJECT_NAME}\\" --stage Staging || true
+. \"${VENV_DIR}/bin/activate\"
+python deploy.py --project \"${PROJECT_NAME}\" --stage Staging || true
 if [ ! -f deployment_time.txt ]; then
   echo 0 > deployment_time.txt
 fi
@@ -170,8 +202,8 @@ fi
                 sh '''
 bash -lc "
 set -euo pipefail
-. \\"${VENV_DIR}/bin/activate\\"
-python -c \\"import joblib, os, json, time
+. \"${VENV_DIR}/bin/activate\"
+python -c \"import joblib, os, json, time
 from sklearn.metrics import accuracy_score
 model = None
 deploy_dir = os.path.join('models','deployed_model')
@@ -215,8 +247,7 @@ os.makedirs('models', exist_ok=True)
 with open(meta_path, 'w') as f:
     json.dump(meta, f, indent=2)
 print('accuracy_after_drift:', acc)
-\\"
-"
+\""
 '''
                 archiveArtifacts artifacts: 'models/model_metadata.json', fingerprint: true
             }
@@ -233,8 +264,8 @@ print('accuracy_after_drift:', acc)
                 sh '''
 bash -lc "
 set -euo pipefail
-. \\"${VENV_DIR}/bin/activate\\"
-python -c \\"import os
+. \"${VENV_DIR}/bin/activate\"
+python -c \"import os
 with open('manual_intervention.txt','a') as fh:
     fh.write('manual_intervention\\\\n')
 pg = os.environ.get('PUSHGATEWAY_URL')
@@ -248,8 +279,7 @@ if pg:
     except Exception as e:
         print('Pushgateway push failed:', e)
 print('Manual intervention logged.')
-\\"
-"
+\""
 '''
                 archiveArtifacts artifacts: 'manual_intervention.txt', fingerprint: true
             }
