@@ -1,7 +1,6 @@
 // Jenkinsfile (declarative pipeline) for the MLOps flow:
 // Checkout -> Preprocess -> Train -> Deploy -> Evaluate drift accuracy -> (Manual intervention logging optional)
 // Assumes Jenkins agent has Python, docker, and environment configured.
-[cite_start]// Adjust paths as needed. [cite: 2]
 
 pipeline {
     agent any
@@ -16,7 +15,7 @@ pipeline {
     options {
         timestamps()
         buildDiscarder(logRotator(numToKeepStr: '30'))
-        [cite_start]timeout(time: 2, unit: 'HOURS') [cite: 3]
+        timeout(time: 2, unit: 'HOURS')
     }
 
     stages {
@@ -28,20 +27,18 @@ pipeline {
 
         stage('Preprocess') {
             steps {
-          
                 sh """
                     python3 preprocess.py
-                [cite_start]""" [cite: 4]
+                """
             }
         }
 
         stage('Train') {
             steps {
-              
-                [cite_start]script { [cite: 5]
+                script {
                     // record training start time
                     env.TRAIN_START = sh(script: "python3 - <<'PY'\nimport time\nprint(int(time.time()))\nPY", returnStdout: true).trim()
-                    [cite_start]sh "python3 trainandevaluate.py 2>&1 | tee train_log.txt" [cite: 6]
+                    sh "python3 trainandevaluate.py 2>&1 | tee train_log.txt"
                     env.TRAIN_END = sh(script: "python3 - <<'PY'\nimport time\nprint(int(time.time()))\nPY", returnStdout: true).trim()
                 }
             }
@@ -49,15 +46,14 @@ pipeline {
 
         stage('Record retrain time metric') {
             steps {
-          
-                [cite_start]script { [cite: 7]
+                script {
                     // compute and save retrain_time_seconds to file for later use/archival
                     sh """
                         python3 - <<'PY'
 import os, json, time
 start = int(os.environ.get('TRAIN_START', '0'))
 end = int(os.environ.get('TRAIN_END', '0'))
-[cite_start]t = end - start if (start and end) else 0 [cite: 8]
+t = end - start if (start and end) else 0
 with open('retrain_time.txt','w') as f:
     f.write(str(t))
 print("retrain_time_seconds:", t)
@@ -69,30 +65,26 @@ PY
         }
 
         stage('Deploy') {
- 
-            [cite_start]steps { [cite: 9]
+            steps {
                 script {
                     def deployStart = System.currentTimeMillis()
                     // call deploy.py to fetch model artifacts and copy into models/deployed_model
-                  
-                    [cite_start]sh "python3 deploy.py --project ${env.PROJECT_NAME} --stage Staging" [cite: 10]
+                    sh "python3 deploy.py --project ${env.PROJECT_NAME} --stage Staging"
                     def deployEnd = System.currentTimeMillis()
                     def deploySeconds = (deployEnd - deployStart) / 1000
                     writeFile file: 'deployment_time.txt', text: deploySeconds.toString()
-                  
-                    [cite_start]archiveArtifacts artifacts: 'deployment_time.txt', fingerprint: true [cite: 11]
+                    archiveArtifacts artifacts: 'deployment_time.txt', fingerprint: true
                 }
             }
         }
 
         stage('Evaluate Drift Accuracy (7-day)') {
             steps {
-                // run a small evaluation that computes accuracy on test set (or a 7-day window if available)
- 
-                [cite_start]sh ''' [cite: 12]
+                sh '''
 python3 - <<'PY'
-import joblib, os, json
+import joblib, os, json, time
 from sklearn.metrics import accuracy_score
+
 # load deployed model (fallback local)
 model = None
 deploy_dir = os.path.join("models","deployed_model")
@@ -101,8 +93,7 @@ if os.path.exists(deploy_dir):
         for f in files:
             if f.endswith(".pkl") or f.endswith(".joblib"):
                 try:
-                 
-                    [cite_start]model = joblib.load(os.path.join(root,f)) [cite: 13]
+                    model = joblib.load(os.path.join(root,f))
                     break
                 except Exception:
                     pass
@@ -110,7 +101,7 @@ if os.path.exists(deploy_dir):
             break
 if model is None:
     # fallback to any local model
-    [cite_start]for f in os.listdir("models"): [cite: 14]
+    for f in os.listdir("models"):
         if f.endswith("_model.pkl"):
             try:
                 model = joblib.load(os.path.join("models", f))
@@ -121,8 +112,7 @@ if model is None:
 # load test set
 if os.path.exists(os.path.join("data","X_test.pkl")) and os.path.exists(os.path.join("data","y_test.pkl")):
     X_test = joblib.load(os.path.join("data","X_test.pkl"))
- 
-    [cite_start]y_test = joblib.load(os.path.join("data","y_test.pkl")) [cite: 15]
+    y_test = joblib.load(os.path.join("data","y_test.pkl"))
     try:
         y_pred = model.predict(X_test)
         acc = float(accuracy_score(y_test, y_pred))
@@ -143,8 +133,7 @@ with open(meta_path, "w") as f:
 print("accuracy_after_drift:", acc)
 PY
 '''
-               
-                [cite_start]archiveArtifacts artifacts: 'models/model_metadata.json', fingerprint: true [cite: 16]
+                archiveArtifacts artifacts: 'models/model_metadata.json', fingerprint: true
             }
         }
 
@@ -152,14 +141,13 @@ PY
             when {
                 anyOf {
                     // trigger when build was user-triggered
-        
-                    [cite_start]triggeredBy 'UserIdCause' [cite: 17]
+                    triggeredBy 'UserIdCause'
                     expression { return params.get('FORCE_MANUAL_LOG', false) == true }
                 }
             }
             steps {
                 sh '''
-[cite_start]python3 - <<'PY' [cite: 18]
+python3 - <<'PY'
 from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
 import os
 # simple manual intervention recorder file
@@ -169,14 +157,12 @@ with open('manual_intervention.txt','a') as fh:
 pg = os.environ.get('PUSHGATEWAY_URL', None)
 if pg:
     try:
-        from prometheus_client import Gauge, CollectorRegistry, push_to_gateway
         registry = CollectorRegistry()
         g = Gauge('manual_intervention_count', 'Manual interventions count', registry=registry)
         g.set(1)
         push_to_gateway(pg + '/metrics/job/${PROJECT_NAME}_manual', registry=registry)
     except Exception as e:
-   
-        [cite_start]print("Pushgateway manual log failed:", e) [cite: 19]
+        print("Pushgateway manual log failed:", e)
 print("Manual intervention logged.")
 PY
 '''
@@ -188,15 +174,13 @@ PY
     post {
         success {
             script {
-                // optionally 
-                [cite_start]// push deployment_time.txt and retrain_time.txt content to an external metrics collector [cite: 20]
+                // optionally push deployment_time.txt and retrain_time.txt content to an external metrics collector
                 def deployTime = readFile('deployment_time.txt').trim()
                 def retrainTime = readFile('retrain_time.txt').trim()
                 echo "Deployment time (s): ${deployTime}"
                 echo "Retrain time (s): ${retrainTime}"
             }
- 
-        [cite_start]} [cite: 21]
+        }
         failure {
             mail to: 'you@example.com',
                  subject: "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
