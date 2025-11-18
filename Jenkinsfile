@@ -6,9 +6,9 @@ pipeline {
         DATA_DIR = "${env.DATA_DIR ?: 'data'}"
         MODEL_DIR = "${env.MODEL_DIR ?: 'models'}"
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
-        CONDA_PATH = "/home/shreekar/miniconda3"   // Miniconda path
-        CONDA_ENV = "mlops-agp"                    // Existing conda environment
-        FLASK_SERVICE = "mlops-flask.service"      // systemd service name
+        CONDA_PATH = "/home/shreekar/miniconda3"
+        CONDA_ENV = "mlops-agp"
+        FLASK_SERVICE = "mlops-flask.service"
     }
 
     options {
@@ -35,7 +35,6 @@ pipeline {
             steps {
                 echo "Running training and evaluation..."
                 script {
-                    // record training start time
                     env.TRAIN_START = sh(script: "python3 -c 'import time; print(int(time.time()))'", returnStdout: true).trim()
                     sh """
                         set -e
@@ -75,12 +74,14 @@ PY
                     conda activate ${CONDA_ENV}
                     python3 deploy.py
                 """
+            }
+        }
 
-                // Ensure Flask systemd service is running and healthy
-                echo "Checking Flask systemd service health..."
+        stage('Run Flask App & Health Check') {
+            steps {
+                echo "Checking Flask service health..."
                 sh """
-                    sudo systemctl restart ${FLASK_SERVICE}   # optional: restart to pick up new model
-                    sleep 5
+                    # Optional: just check service health via curl
                     if curl --max-time 5 --silent --fail http://localhost:5000/health; then
                         echo '[✔] Flask service is healthy!'
                     else
