@@ -6,10 +6,9 @@ pipeline {
         DATA_DIR = "${env.DATA_DIR ?: 'data'}"
         MODEL_DIR = "${env.MODEL_DIR ?: 'models'}"
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
-        CONDA_PATH = "/home/shreekar/miniconda3"   // Correct Miniconda path
-        CONDA_ENV = "mlops-agp"                    // Existing conda env
-        FLASK_PORT = "5000"
-        FLASK_LOG = "flask_app.log"
+        CONDA_PATH = "/home/shreekar/miniconda3"   // Miniconda path
+        CONDA_ENV = "mlops-agp"                    // Existing conda environment
+        FLASK_SERVICE = "mlops-flask.service"      // systemd service name
     }
 
     options {
@@ -76,30 +75,16 @@ PY
                     conda activate ${CONDA_ENV}
                     python3 deploy.py
                 """
-            }
-        }
 
-        stage('Run Flask App') {
-            steps {
-                echo "Starting Flask app in background..."
+                // Ensure Flask systemd service is running and healthy
+                echo "Checking Flask systemd service health..."
                 sh """
-                    set -e
-                    . ${CONDA_PATH}/etc/profile.d/conda.sh
-                    conda activate ${CONDA_ENV}
-
-                    # Kill any existing Flask process on the port
-                    pkill -f 'python3 app.py' || true
-
-                    # Start Flask app with nohup so it runs independently
-                    nohup python3 app.py > ${FLASK_LOG} 2>&1 &
-                    
-                    # Wait 5 seconds and check health
+                    sudo systemctl restart ${FLASK_SERVICE}   # optional: restart to pick up new model
                     sleep 5
-                    if curl --max-time 3 --silent --show-error --fail "http://127.0.0.1:${FLASK_PORT}" > /dev/null; then
-                        echo "[✔] Flask is running on port ${FLASK_PORT}!"
+                    if curl --max-time 5 --silent --fail http://localhost:5000/health; then
+                        echo '[✔] Flask service is healthy!'
                     else
-                        echo "[✘] Flask failed to start!"
-                        cat ${FLASK_LOG}
+                        echo '[✘] Flask service did not respond correctly!'
                         exit 1
                     fi
                 """
@@ -109,7 +94,8 @@ PY
 
     post {
         always {
-            echo "Pipeline finished. Flask is still running independently on port ${FLASK_PORT}."
+            echo "Cleaning up workspace..."
+            cleanWs()
         }
     }
 }
