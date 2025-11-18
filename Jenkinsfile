@@ -19,6 +19,29 @@ pipeline {
 
     stages {
 
+        stage('Check changes (diabetes.csv)') {
+            steps {
+                script {
+                    // Ensure we have recent refs to diff against
+                    sh "git fetch --all --quiet || true"
+
+                    // Get changed files between last two commits
+                    // NOTE: this uses HEAD~1 HEAD (works for typical push events where HEAD~1 exists)
+                    def changedFiles = sh(script: "git diff --name-only HEAD~1 HEAD || true", returnStdout: true).trim()
+                    echo "Changed files (HEAD~1..HEAD):\\n${changedFiles}"
+
+                    if (!changedFiles?.contains('diabetes.csv')) {
+                        echo "No changes to diabetes.csv detected — skipping pipeline."
+                        // Mark build as not built and exit the pipeline early
+                        currentBuild.result = 'NOT_BUILT'
+                        return
+                    } else {
+                        echo "diabetes.csv changed — continuing pipeline."
+                    }
+                }
+            }
+        }
+
         stage('Preprocess') {
             steps {
                 echo "Running preprocessing..."
@@ -81,7 +104,7 @@ PY
             steps {
                 echo "Checking Flask service health..."
                 sh """
-                    # Optional: just check service health via curl
+                    # Optional: just check service health via curl (assumes systemd-managed Flask or an already-running Flask)
                     if curl --max-time 5 --silent --fail http://localhost:5000/health; then
                         echo '[✔] Flask service is healthy!'
                     else
