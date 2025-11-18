@@ -6,217 +6,125 @@ pipeline {
         DATA_DIR = "${env.DATA_DIR ?: 'data'}"
         MODEL_DIR = "${env.MODEL_DIR ?: 'models'}"
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
-        VENV_DIR = "venv"
+        CONDA_ENV = "${env.CONDA_ENV ?: 'mlops-agp'}"  // Name of your pre-created conda env
     }
 
     options {
         timestamps()
-        buildDiscarder(logRotator(numToKeepStr: '30'))
-        timeout(time: 2, unit: 'HOURS')
+        ansiColor('xterm')
+        timeout(time: 1, unit: 'HOURS')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
     stages {
-        stage('Checkout') {
+        stage('Checkout SCM') {
             steps {
-                checkout scm
+                git branch: 'main', url: 'https://github.com/your-username/mlops-agp.git'
             }
         }
 
-        stage('Clean Virtual Environment') {
+        stage('Activate Conda Environment') {
             steps {
-                sh 'rm -rf venv'
-                sh 'pip cache purge || true' // clean pip cache to remove failed builds
-            }
-        }
-
-        stage('Setup Environment') {
-            steps {
-                script {
-                    sh """
-                        python3 -m venv ${env.VENV_DIR}
-                        . ${env.VENV_DIR}/bin/activate
-                        pip install --upgrade pip
-                        pip install wheel setuptools --upgrade
-                        pip install -r requirements.txt
-                    """
-                }
-            }
-        }
-
-        stage('Verify Python Modules') {
-            steps {
+                echo "Activating pre-configured conda environment: ${CONDA_ENV}"
                 sh """
-                    . ${env.VENV_DIR}/bin/activate
-                    python -c "import pandas; print('pandas OK')"
-                    python -c "import numpy; print('numpy OK')"
-                    python -c "import sklearn; print('sklearn OK')"
+                    source ~/miniconda3/etc/profile.d/conda.sh
+                    conda activate ${CONDA_ENV}
+                    python -c "import sys, numpy, pandas, sklearn, xgboost, mlflow; print('Python:', sys.version); print('numpy', numpy.__version__)"
                 """
             }
         }
 
-        stage('Preprocess') {
+        stage('Preprocess Data') {
             steps {
+                echo "Running preprocess.py"
                 sh """
-                    . ${env.VENV_DIR}/bin/activate
-                    python preprocess.py
+                    source ~/miniconda3/etc/profile.d/conda.sh
+                    conda activate ${CONDA_ENV}
+                    python preprocess.py 2>&1 | tee preprocess_log.txt
                 """
             }
         }
 
-        stage('Train') {
+        stage('Train Model') {
             steps {
                 script {
                     env.TRAIN_START = sh(script: """
-                        . ${env.VENV_DIR}/bin/activate
-                        python -c "import time; print(int(time.time()))"
-                        """, returnStdout: true).trim()
+                        source ~/miniconda3/etc/profile.d/conda.sh
+                        conda activate ${CONDA_ENV}
+                        python - <<'PY'
+import time
+print(int(time.time()))
+PY
+                    """, returnStdout: true).trim()
+
                     sh """
-                        . ${env.VENV_DIR}/bin/activate
+                        source ~/miniconda3/etc/profile.d/conda.sh
+                        conda activate ${CONDA_ENV}
                         python trainandevaluate.py 2>&1 | tee train_log.txt
                     """
+
                     env.TRAIN_END = sh(script: """
-                        . ${env.VENV_DIR}/bin/activate
-                        python -c "import time; print(int(time.time()))"
-                        """, returnStdout: true).trim()
+                        source ~/miniconda3/etc/profile.d/conda.sh
+                        conda activate ${CONDA_ENV}
+                        python - <<'PY'
+import time
+print(int(time.time()))
+PY
+                    """, returnStdout: true).trim()
                 }
             }
         }
 
-        stage('Record retrain time metric') {
+        stage('Record Retrain Time Metric') {
             steps {
                 script {
                     sh """
-                        . ${env.VENV_DIR}/bin/activate
+                        source ~/miniconda3/etc/profile.d/conda.sh
+                        conda activate ${CONDA_ENV}
                         python - <<'PY'
-import os, json, time
+import os
 start = int(os.environ.get('TRAIN_START', '0'))
 end = int(os.environ.get('TRAIN_END', '0'))
 t = end - start if (start and end) else 0
-with open('retrain_time.txt','w') as f:
+with open('retrain_time.txt', 'w') as f:
     f.write(str(t))
 print("retrain_time_seconds:", t)
 PY
                     """
-                    archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', fingerprint: true
                 }
             }
         }
 
-        stage('Deploy') {
+        stage('Deploy Application') {
             steps {
-                script {
-                    def deployStart = System.currentTimeMillis()
-                    sh """
-                        . ${env.VENV_DIR}/bin/activate
-                        python deploy.py --project ${env.PROJECT_NAME} --stage Staging
-                    """
-                    def deployEnd = System.currentTimeMillis()
-                    def deploySeconds = (deployEnd - deployStart) / 1000
-                    writeFile file: 'deployment_time.txt', text: deploySeconds.toString()
-                    archiveArtifacts artifacts: 'deployment_time.txt', fingerprint: true
-                }
-            }
-        }
-
-        stage('Evaluate Drift Accuracy (7-day)') {
-            steps {
+                echo "Running deploy.py & app.py"
                 sh """
-                    . ${env.VENV_DIR}/bin/activate
-                    python - <<'PY'
-import joblib, os, json, time
-from sklearn.metrics import accuracy_score
-
-model = None
-deploy_dir = os.path.join("models","deployed_model")
-if os.path.exists(deploy_dir):
-    for root,_,files in os.walk(deploy_dir):
-        for f in files:
-            if f.endswith(".pkl") or f.endswith(".joblib"):
-                try:
-                    model = joblib.load(os.path.join(root,f))
-                    break
-                except Exception:
-                    pass
-        if model:
-            break
-if model is None:
-    for f in os.listdir("models"):
-        if f.endswith("_model.pkl"):
-            try:
-                model = joblib.load(os.path.join("models", f))
-                break
-            except Exception:
-                pass
-
-if os.path.exists(os.path.join("data","X_test.pkl")) and os.path.exists(os.path.join("data","y_test.pkl")):
-    X_test = joblib.load(os.path.join("data","X_test.pkl"))
-    y_test = joblib.load(os.path.join("data","y_test.pkl"))
-    try:
-        y_pred = model.predict(X_test)
-        acc = float(accuracy_score(y_test, y_pred))
-    except Exception:
-        acc = 0.0
-else:
-    acc = 0.0
-
-meta_path = os.path.join("models","model_metadata.json")
-meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
-meta.setdefault("evaluations", [])
-entry = {"ts": int(time.time()), "accuracy_last_test": acc}
-meta["evaluations"].append(entry)
-meta["evaluations"] = meta["evaluations"][-20:]
-with open(meta_path, "w") as f:
-    json.dump(meta, f, indent=2)
-print("accuracy_after_drift:", acc)
-PY
+                    source ~/miniconda3/etc/profile.d/conda.sh
+                    conda activate ${CONDA_ENV}
+                    python deploy.py 2>&1 | tee deploy_log.txt
+                    # Optionally start Flask app in background (for demo/testing)
+                    nohup python app.py &
                 """
-                archiveArtifacts artifacts: 'models/model_metadata.json', fingerprint: true
             }
         }
 
-        stage('Manual Intervention Logging (optional)') {
-            when {
-                anyOf {
-                    triggeredBy 'UserIdCause'
-                    expression { return params.get('FORCE_MANUAL_LOG', false) == true }
-                }
-            }
+        stage('Archive Artifacts') {
             steps {
-                sh """
-                    . ${env.VENV_DIR}/bin/activate
-                    python - <<'PY'
-from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
-import os
-
-with open('manual_intervention.txt','a') as fh:
-    fh.write("manual_intervention\\n")
-
-pg = os.environ.get('PUSHGATEWAY_URL', None)
-if pg:
-    try:
-        registry = CollectorRegistry()
-        g = Gauge('manual_intervention_count', 'Manual interventions count', registry=registry)
-        g.set(1)
-        push_to_gateway(pg + '/metrics/job/${PROJECT_NAME}_manual', registry=registry)
-    except Exception as e:
-        print("Pushgateway manual log failed:", e)
-
-print("Manual intervention logged.")
-PY
-                """
-                archiveArtifacts artifacts: 'manual_intervention.txt', fingerprint: true
+                archiveArtifacts artifacts: "train_log.txt,retrain_time.txt,preprocess_log.txt,deploy_log.txt,${MODEL_DIR}/**", fingerprint: true
             }
         }
     }
 
     post {
+        always {
+            echo "Pipeline finished. Cleaning workspace..."
+            cleanWs()
+        }
         success {
-            script {
-                def deployTime = readFile('deployment_time.txt').trim()
-                def retrainTime = readFile('retrain_time.txt').trim()
-                echo "Deployment time (s): ${deployTime}"
-                echo "Retrain time (s): ${retrainTime}"
-            }
+            echo "Pipeline succeeded."
+        }
+        failure {
+            echo "Pipeline failed."
         }
     }
 }
