@@ -8,6 +8,8 @@ pipeline {
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
         CONDA_PATH = "/home/shreekar/miniconda3"   // Correct Miniconda path
         CONDA_ENV = "mlops-agp"                    // Existing conda env
+        FLASK_PORT = "5000"
+        FLASK_LOG = "flask_app.log"
     }
 
     options {
@@ -79,12 +81,27 @@ PY
 
         stage('Run Flask App') {
             steps {
-                echo "Starting Flask app..."
+                echo "Starting Flask app in background..."
                 sh """
                     set -e
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
                     conda activate ${CONDA_ENV}
-                    nohup python3 app.py > flask_app.log 2>&1 &
+
+                    # Kill any existing Flask process on the port
+                    pkill -f 'python3 app.py' || true
+
+                    # Start Flask app with nohup so it runs independently
+                    nohup python3 app.py > ${FLASK_LOG} 2>&1 &
+                    
+                    # Wait 5 seconds and check health
+                    sleep 5
+                    if curl --max-time 3 --silent --show-error --fail "http://127.0.0.1:${FLASK_PORT}" > /dev/null; then
+                        echo "[✔] Flask is running on port ${FLASK_PORT}!"
+                    else
+                        echo "[✘] Flask failed to start!"
+                        cat ${FLASK_LOG}
+                        exit 1
+                    fi
                 """
             }
         }
@@ -92,11 +109,7 @@ PY
 
     post {
         always {
-            echo "Cleaning up workspace and stopping Flask app..."
-            sh """
-                pkill -f 'python3 app.py' || true
-            """
-            cleanWs()
+            echo "Pipeline finished. Flask is still running independently on port ${FLASK_PORT}."
         }
     }
 }
