@@ -7,7 +7,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import joblib
 
-DATA_URL = os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/diabetes.csv")
+DATA_URL = os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/diabetes_new.csv")
 OUT_DIR = os.getenv("DATA_DIR", "data")
 os.makedirs(OUT_DIR, exist_ok=True)
 
