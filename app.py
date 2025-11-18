@@ -228,5 +228,10 @@ def health():
     return {"status": "healthy", "uptime_seconds": uptime}
 
 if __name__ == '__main__':
+    import sys
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+    print("[INFO] Starting Flask server on port 5000...")
     app.run(host='0.0.0.0', port=5000)
+
 
