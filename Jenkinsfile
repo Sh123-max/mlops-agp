@@ -6,125 +6,99 @@ pipeline {
         DATA_DIR = "${env.DATA_DIR ?: 'data'}"
         MODEL_DIR = "${env.MODEL_DIR ?: 'models'}"
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
-        CONDA_ENV = "${env.CONDA_ENV ?: 'mlops-agp'}"  // Name of your pre-created conda env
+        CONDA_PATH = "${env.HOME}/miniconda3/etc/profile.d/conda.sh"
+        CONDA_ENV = "mlops-agp"
     }
 
     options {
         timestamps()
         ansiColor('xterm')
-        timeout(time: 1, unit: 'HOURS')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 60, unit: 'MINUTES')
     }
 
     stages {
-        stage('Checkout SCM') {
-            steps {
-                git branch: 'main', url: 'https://github.com/your-username/mlops-agp.git'
-            }
-        }
 
-        stage('Activate Conda Environment') {
+        stage('Preprocess') {
             steps {
-                echo "Activating pre-configured conda environment: ${CONDA_ENV}"
+                echo "Running preprocessing..."
                 sh """
-                    source ~/miniconda3/etc/profile.d/conda.sh
-                    conda activate ${CONDA_ENV}
-                    python -c "import sys, numpy, pandas, sklearn, xgboost, mlflow; print('Python:', sys.version); print('numpy', numpy.__version__)"
+                source ${CONDA_PATH}
+                conda activate ${CONDA_ENV}
+                python preprocess.py
                 """
             }
         }
 
-        stage('Preprocess Data') {
+        stage('Train & Evaluate') {
             steps {
-                echo "Running preprocess.py"
-                sh """
-                    source ~/miniconda3/etc/profile.d/conda.sh
-                    conda activate ${CONDA_ENV}
-                    python preprocess.py 2>&1 | tee preprocess_log.txt
-                """
-            }
-        }
-
-        stage('Train Model') {
-            steps {
+                echo "Starting training..."
                 script {
-                    env.TRAIN_START = sh(script: """
-                        source ~/miniconda3/etc/profile.d/conda.sh
-                        conda activate ${CONDA_ENV}
-                        python - <<'PY'
-import time
-print(int(time.time()))
-PY
-                    """, returnStdout: true).trim()
-
+                    env.TRAIN_START = sh(script: "date +%s", returnStdout: true).trim()
                     sh """
-                        source ~/miniconda3/etc/profile.d/conda.sh
-                        conda activate ${CONDA_ENV}
-                        python trainandevaluate.py 2>&1 | tee train_log.txt
+                    source ${CONDA_PATH}
+                    conda activate ${CONDA_ENV}
+                    python trainandevaluate.py 2>&1 | tee train_log.txt
                     """
-
-                    env.TRAIN_END = sh(script: """
-                        source ~/miniconda3/etc/profile.d/conda.sh
-                        conda activate ${CONDA_ENV}
-                        python - <<'PY'
-import time
-print(int(time.time()))
-PY
-                    """, returnStdout: true).trim()
+                    env.TRAIN_END = sh(script: "date +%s", returnStdout: true).trim()
                 }
             }
         }
 
-        stage('Record Retrain Time Metric') {
+        stage('Record retrain time metric') {
             steps {
-                script {
-                    sh """
-                        source ~/miniconda3/etc/profile.d/conda.sh
-                        conda activate ${CONDA_ENV}
-                        python - <<'PY'
+                echo "Recording training duration..."
+                sh """
+                source ${CONDA_PATH}
+                conda activate ${CONDA_ENV}
+                python - <<'PY'
 import os
 start = int(os.environ.get('TRAIN_START', '0'))
 end = int(os.environ.get('TRAIN_END', '0'))
 t = end - start if (start and end) else 0
-with open('retrain_time.txt', 'w') as f:
+with open('retrain_time.txt','w') as f:
     f.write(str(t))
 print("retrain_time_seconds:", t)
 PY
-                    """
-                }
+                """
+                archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', fingerprint: true
             }
         }
 
-        stage('Deploy Application') {
+        stage('Deploy Model') {
             steps {
-                echo "Running deploy.py & app.py"
+                echo "Deploying model..."
                 sh """
-                    source ~/miniconda3/etc/profile.d/conda.sh
-                    conda activate ${CONDA_ENV}
-                    python deploy.py 2>&1 | tee deploy_log.txt
-                    # Optionally start Flask app in background (for demo/testing)
-                    nohup python app.py &
+                source ${CONDA_PATH}
+                conda activate ${CONDA_ENV}
+                python deploy.py
                 """
             }
         }
 
-        stage('Archive Artifacts') {
+        stage('Run Flask App') {
             steps {
-                archiveArtifacts artifacts: "train_log.txt,retrain_time.txt,preprocess_log.txt,deploy_log.txt,${MODEL_DIR}/**", fingerprint: true
+                echo "Starting Flask app..."
+                sh """
+                source ${CONDA_PATH}
+                conda activate ${CONDA_ENV}
+                nohup python app.py > flask_app.log 2>&1 &
+                """
             }
         }
+
     }
 
     post {
-        always {
-            echo "Pipeline finished. Cleaning workspace..."
-            cleanWs()
-        }
         success {
-            echo "Pipeline succeeded."
+            echo "Pipeline completed successfully!"
         }
         failure {
-            echo "Pipeline failed."
+            echo "Pipeline failed. Check logs for details."
+        }
+        always {
+            echo "Cleaning up workspace..."
+            // Optionally, stop Flask app if needed
+            sh "pkill -f 'python app.py' || true"
         }
     }
 }
