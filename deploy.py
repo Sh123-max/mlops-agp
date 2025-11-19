@@ -1,3 +1,4 @@
+# deploy.py
 # deploy.py (robust: resolves models:/ -> runs:/ and downloads artifacts)
 import os
 import json
@@ -97,6 +98,7 @@ def deploy_best(project, stage="Staging"):
                 with open(os.path.join(MODEL_DIR, "model_metadata.json"), "w") as f:
                     json.dump(metadata, f, indent=2)
                 print("[OK] Downloaded artifacts via client.download_artifacts")
+                print(f"[DEPLOYED] model_name={best_name} registry_name={registry_name} version={metadata.get('version')} deployed_path={metadata.get('deployed_path')}")
                 
                 # Record successful deployment
                 metrics_history = MetricsHistory()
@@ -129,6 +131,7 @@ def deploy_best(project, stage="Staging"):
                     with open(os.path.join(MODEL_DIR, "model_metadata.json"), "w") as f:
                         json.dump(metadata, f, indent=2)
                     print("[OK] Downloaded artifacts via client.download_artifacts (tuple path)")
+                    print(f"[DEPLOYED] model_name={best_name} registry_name={registry_name} version={metadata.get('version')} deployed_path={metadata.get('deployed_path')}")
                     
                     # Record successful deployment
                     metrics_history = MetricsHistory()
@@ -148,6 +151,7 @@ def deploy_best(project, stage="Staging"):
                         json.dump(metadata, f, indent=2)
                     print("[OK] Downloaded artifacts to", local_path)
                     print("[OK] Deployment metadata written to models/model_metadata.json")
+                    print(f"[DEPLOYED] model_name={best_name} registry_name={registry_name} version={metadata.get('version')} deployed_path={local_path}")
                     
                     # Record successful deployment
                     metrics_history = MetricsHistory()
@@ -182,6 +186,7 @@ def deploy_best(project, stage="Staging"):
                 json.dump(metadata, f, indent=2)
         print("[OK] Fallback: copied local model to", deployed)
         print("[OK] Deployment metadata written to models/model_metadata.json")
+        print(f"[DEPLOYED] model_name={best_name} registry_name={registry_name} version={metadata.get('version')} deployed_path={deployed}")
         
         # Record successful deployment
         metrics_history = MetricsHistory()
@@ -227,6 +232,14 @@ if __name__ == "__main__":
     success = deploy_best(args.project, args.stage)
     if success:
         print("Deployment completed successfully")
+        # extra info from model_metadata.json if present
+        try:
+            mm = json.load(open(os.path.join(MODEL_DIR, "model_metadata.json")))
+            name = mm.get("model_name") or mm.get("best", {}).get("name")
+            version = mm.get("version") or (mm.get("best", {}).get("registry") or {}).get("version")
+            print(f"[DEPLOYED-METADATA] model_name={name} version={version}")
+        except Exception:
+            pass
     else:
         print("Deployment was blocked or failed")
         exit(1)
