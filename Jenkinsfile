@@ -71,44 +71,49 @@ pipeline {
         }
 
         stage('Model Validation') {
-            steps {
-                echo "Validating model performance against previous best..."
-                sh """
-                    set -e
-                    . ${CONDA_PATH}/etc/profile.d/conda.sh
-                    conda activate ${CONDA_ENV}
-                    python3 -c "
-                    import json, os, sys
-                    summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
-                    if not os.path.exists(summary_path):
-                        print('No summary file found')
-                        sys.exit(1)
-                    summary = json.load(open(summary_path))
-                    best = summary.get('best', {})
-                    should_deploy = best.get('should_deploy', True)
-                    deploy_reason = best.get('deploy_reason', 'No reason provided')
-                    
-                    if not should_deploy:
-                        print(f'Model validation failed: {deploy_reason}')
-                        # Write to file for artifact collection
-                        with open('validation_failure.txt', 'w') as f:
-                            f.write(deploy_reason)
-                        sys.exit(1)
-                    print(f'Model validation passed: {deploy_reason}')
-                    "
-                """
-            }
-            post {
-                failure {
-                    echo "Model validation failed - performance degradation detected"
-                    archiveArtifacts artifacts: 'validation_failure.txt', fingerprint: true
-                    // Optionally trigger manual review workflow
-                    sh """
-                        echo "Manual intervention required due to model performance degradation"
-                    """
-                }
-            }
+    steps {
+        echo "Validating model performance against previous best..."
+        sh """
+            set -e
+            . ${CONDA_PATH}/etc/profile.d/conda.sh
+            conda activate ${CONDA_ENV}
+
+            python3 - <<-'PY'
+import json, os, sys
+
+summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
+if not os.path.exists(summary_path):
+    print('No summary file found')
+    sys.exit(1)
+
+summary = json.load(open(summary_path))
+best = summary.get('best', {})
+should_deploy = best.get('should_deploy', True)
+deploy_reason = best.get('deploy_reason', 'No reason provided')
+
+if not should_deploy:
+    print(f'Model validation failed: {deploy_reason}')
+    # Write to file for artifact collection
+    with open('validation_failure.txt', 'w') as f:
+        f.write(deploy_reason)
+    sys.exit(1)
+
+print(f'Model validation passed: {deploy_reason}')
+PY
+        """
+    }
+    post {
+        failure {
+            echo "Model validation failed - performance degradation detected"
+            archiveArtifacts artifacts: 'validation_failure.txt', fingerprint: true
+            // Optionally trigger manual review workflow
+            sh """
+                echo "Manual intervention required due to model performance degradation"
+            """
         }
+    }
+}
+
 
         stage('Record Retrain Time Metric') {
             steps {
