@@ -1,51 +1,185 @@
-<!-- form.html -->
+<!-- templates/form.html (UPDATED) -->
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>Diabetes Prediction</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { font-family: Arial, sans-serif; max-width: 700px; margin: 30px auto; }
-    label { display: block; margin-top: 8px; }
-    input[type="text"] { width: 100%; padding: 6px; }
-    .btn { margin-top: 12px; padding: 10px 14px; background: #007bff; color: white; border: none; cursor: pointer; }
-    .result { margin-top: 16px; padding: 12px; background: #f8f9fa; border-radius: 6px; }
-    .error { color: red; }
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 12px; color: #222; }
+    h1, h2 { margin: 8px 0; }
+    .two-col { display: grid; grid-template-columns: 1fr 360px; gap: 18px; align-items: start; }
+    .card { background:#fff; border:1px solid #e6e6e6; padding:14px; border-radius:8px; box-shadow: 0 1px 0 rgba(0,0,0,0.02); }
+    label { display:block; margin:8px 0 4px; font-weight:600; font-size:0.95rem;}
+    input[type="text"], input[type="number"] { width:100%; padding:8px; border:1px solid #ddd; border-radius:4px; box-sizing:border-box; }
+    .btn { display:inline-block; margin-top:12px; padding:10px 14px; background:#007bff; color:white; border:none; border-radius:6px; cursor:pointer; text-decoration:none; }
+    .btn:disabled { opacity:0.6; cursor:not-allowed; }
+    .result { margin-top:12px; padding:12px; background:#f8f9fa; border-radius:6px; }
+    .error { color: #b31b1b; background: #fff0f0; padding:8px; border-radius:6px; }
+    .muted { color:#666; font-size:0.9rem; }
+    .meta-list { list-style:none; padding:0; margin:0; }
+    .meta-list li { padding:6px 0; border-bottom:1px dashed #eee; font-size:0.95rem; }
+    .small { font-size:0.87rem; color:#555 }
+    pre { white-space:pre-wrap; word-break:break-word; background:#f7f7f7; padding:8px; border-radius:6px; }
+    @media (max-width:800px){ .two-col { grid-template-columns: 1fr; } .card { padding:12px; } }
   </style>
 </head>
 <body>
-  <h2>Diabetes Prediction</h2>
-  <form action="/predict" method="post">
-    <label>Pregnancies <input type="text" name="Pregnancies"></label>
-    <label>Glucose <input type="text" name="Glucose"></label>
-    <label>BloodPressure <input type="text" name="BloodPressure"></label>
-    <label>SkinThickness <input type="text" name="SkinThickness"></label>
-    <label>Insulin <input type="text" name="Insulin"></label>
-    <label>BMI <input type="text" name="BMI"></label>
-    <label>DiabetesPedigreeFunction <input type="text" name="DiabetesPedigreeFunction"></label>
-    <label>Age <input type="text" name="Age"></label>
-    <button type="submit" class="btn">Predict</button>
-  </form>
+  <h1>Diabetes Prediction</h1>
 
-  {% if prediction %}
-    <div class="result">
-      <strong>Prediction:</strong> {{ prediction }} <br>
-      <strong>Probability:</strong> {{ probability }}
+  <div class="two-col">
+    <!-- Left: prediction form -->
+    <div class="card">
+      <form action="/predict" method="post" novalidate>
+        <label for="Pregnancies">Pregnancies</label>
+        <input id="Pregnancies" name="Pregnancies" type="text" inputmode="numeric" />
+
+        <label for="Glucose">Glucose</label>
+        <input id="Glucose" name="Glucose" type="text" inputmode="numeric" />
+
+        <label for="BloodPressure">BloodPressure</label>
+        <input id="BloodPressure" name="BloodPressure" type="text" inputmode="numeric" />
+
+        <label for="SkinThickness">SkinThickness</label>
+        <input id="SkinThickness" name="SkinThickness" type="text" inputmode="numeric" />
+
+        <label for="Insulin">Insulin</label>
+        <input id="Insulin" name="Insulin" type="text" inputmode="numeric" />
+
+        <label for="BMI">BMI</label>
+        <input id="BMI" name="BMI" type="text" inputmode="decimal" />
+
+        <label for="DiabetesPedigreeFunction">DiabetesPedigreeFunction</label>
+        <input id="DiabetesPedigreeFunction" name="DiabetesPedigreeFunction" type="text" inputmode="decimal" />
+
+        <label for="Age">Age</label>
+        <input id="Age" name="Age" type="text" inputmode="numeric" />
+
+        <button type="submit" class="btn">Predict</button>
+      </form>
+
+      {% if prediction %}
+        <div class="result">
+          <div><strong>Prediction:</strong> {{ prediction }}</div>
+          <div style="margin-top:6px;"><strong>Probability:</strong> {{ probability }}</div>
+        </div>
+      {% endif %}
+
+      {% if error_messages %}
+        <div class="result error" role="alert" aria-live="polite">
+          <strong>Errors:</strong>
+          <ul>
+            {% for e in error_messages %}
+              <li>{{ e }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
     </div>
-  {% endif %}
 
-  {% if error_messages %}
-    <div class="result error">
-      <strong>Errors:</strong>
-      <ul>
-        {% for e in error_messages %}
-          <li>{{ e }}</li>
-        {% endfor %}
+    <!-- Right: model & deployment metadata -->
+    <aside class="card">
+      <h2>Deployed model</h2>
+
+      <p class="muted">Current model loaded by the Flask app and used for predictions.</p>
+
+      <ul class="meta-list">
+        <li><strong>Model name:</strong>
+            <div class="small">{{ model_name or "unknown" }}</div>
+        </li>
+
+        <li>
+          <strong>Model metrics (best run)</strong>
+          {% if model_metrics %}
+            <div class="small">
+              Accuracy: {{ ('{:.3f}'.format(model_metrics.get('accuracy')) if model_metrics.get('accuracy') is not none else 'N/A') }}<br>
+              Precision: {{ ('{:.3f}'.format(model_metrics.get('precision')) if model_metrics.get('precision') is not none else 'N/A') }}<br>
+              Recall: {{ ('{:.3f}'.format(model_metrics.get('recall')) if model_metrics.get('recall') is not none else 'N/A') }}<br>
+              F1: {{ ('{:.3f}'.format(model_metrics.get('f1_score')) if model_metrics.get('f1_score') is not none else 'N/A') }}<br>
+              ROC AUC: {{ ('{:.3f}'.format(model_metrics.get('roc_auc')) if model_metrics.get('roc_auc') is not none else 'N/A') }}<br>
+              Weighted score: {{ ('{:.3f}'.format(model_metrics.get('weighted_score')) if model_metrics.get('weighted_score') is not none else 'N/A') }}
+            </div>
+          {% else %}
+            <div class="small">No metrics available (model metadata not found).</div>
+          {% endif %}
+        </li>
+
+        <li>
+          <strong>Model registry / version</strong>
+          <div class="small">
+            {% if model_metrics and model_metrics.get('registry') %}
+              {{ model_metrics.get('registry').get('name', 'N/A') }} / v{{ model_metrics.get('registry').get('version', 'N/A') }}
+            {% else %}
+              {% set meta_version = (model_metrics.get('version') if model_metrics.get('version') is defined else None) %}
+              {% if meta_version %}
+                version: {{ meta_version }}
+              {% else %}
+                (no registry version present)
+              {% endif %}
+            {% endif %}
+          </div>
+        </li>
+
+        <li>
+          <strong>Deployed timestamp</strong>
+          <div class="small">
+            {% if model_metrics and model_metrics.get('ts') %}
+              {{ model_metrics.get('ts') | int }} (unix)
+            {% else %}
+              (see models/model_metadata.json)
+            {% endif %}
+          </div>
+        </li>
+
+        <li>
+          <strong>Drift reports (recent)</strong>
+          <div class="small">
+            {% set drift_count = None %}
+            {% if model_metrics and model_metrics.get('drift_reports') %}
+              {% set drift_count = model_metrics.get('drift_reports') | length %}
+            {% endif %}
+            {{ drift_count if drift_count is not none else "0" }}
+          </div>
+        </li>
       </ul>
-    </div>
-  {% endif %}
 
-  <hr>
-  <div>Model: {{ model_name }}</div>
+      <hr style="margin:10px 0;" />
+
+      <div class="small">
+        <strong>Status:</strong>
+        {% if model_name and model_metrics %}
+          <span style="color:green">Model "{{ model_name }}" appears loaded</span>
+        {% elif model_name %}
+          <span style="color:orange">Model name known: "{{ model_name }}" - metrics not present</span>
+        {% else %}
+          <span style="color:red">No model loaded</span>
+        {% endif %}
+      </div>
+
+      <p style="margin-top:12px" class="small">
+        If you want to change which model is deployed, run <code>python deploy.py</code> (or use your CI pipeline).
+        After deployment, refresh this page to see the latest metadata.
+      </p>
+
+      <div style="margin-top:10px;">
+        <form method="get" action="/">
+          <button type="submit" class="btn">Refresh model info</button>
+        </form>
+      </div>
+
+      <div style="margin-top:12px;">
+        <details>
+          <summary class="small">Raw model_metrics (debug)</summary>
+          <pre>{{ model_metrics | tojson(indent=2) }}</pre>
+        </details>
+      </div>
+    </aside>
+  </div>
+
+  <hr style="margin:20px 0;" />
+
+  <footer class="small muted">
+    Flask app hostname: {{ request.host }} &nbsp; • &nbsp; Visit <a href="/metrics">/metrics</a> for Prometheus metrics.
+  </footer>
 </body>
 </html>
