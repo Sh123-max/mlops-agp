@@ -5,7 +5,6 @@ It loads a deployed model (from models/deployed_model or fallback local model),
 records inference latency, input validation errors, prediction counts,
 and writes drift report entries to models/model_metadata.json.
 """
-
 from flask import Flask, request, render_template
 import os, json, joblib, numpy as np, time, socket
 from prometheus_client import Gauge, Counter, Histogram
@@ -32,16 +31,52 @@ model_metrics = {}
 baseline = None
 start_time = time.time()
 
-# load model metadata and model artifact
-try:
-    metadata_path = os.path.join("models", "model_metadata.json")
-    if os.path.exists(metadata_path):
-        meta = json.load(open(metadata_path))
-        # prefer explicit model_name, else take best
-        model_name = meta.get("model_name", meta.get("best", {}).get("name", "unknown"))
-        version = meta.get("best", {}).get("registry", {}).get("version", meta.get("version", "v1"))
-        MODEL_INFO.labels(model_name=model_name, model_version=str(version), host=HOSTNAME).set(1)
-        # attempt to load deployed model
+# path & reload state
+meta_path = os.path.join("models", "model_metadata.json")
+last_meta_mtime = None
+
+def load_model_and_metadata(force=False):
+    """
+    Load model_metadata.json and model artifact if available.
+    If force is False, function will check mtime to avoid unnecessary reloads.
+    """
+    global model, model_name, model_metrics, baseline, last_meta_mtime
+
+    try:
+        if not os.path.exists(meta_path):
+            return
+        mtime = os.path.getmtime(meta_path)
+        if not force and last_meta_mtime is not None and mtime == last_meta_mtime:
+            return  # no change
+        last_meta_mtime = mtime
+
+        meta = json.load(open(meta_path))
+
+        # update model_name and model_metrics
+        model_name = meta.get("model_name", meta.get("best", {}).get("name", model_name))
+        model_metrics = {}
+        if "results" in meta:
+            for r in meta.get("results", []):
+                if r.get("name") == meta.get("best", {}).get("name"):
+                    model_metrics = r
+                    break
+
+        if "baseline" in meta:
+            baseline = meta.get("baseline")
+
+        # set prometheus info label (version or 'unknown')
+        version = meta.get("version") or (meta.get("best", {}).get("registry") or {}).get("version") or "unknown"
+        try:
+            MODEL_INFO.labels(model_name=model_name, model_version=str(version), host=HOSTNAME).set(1)
+        except Exception:
+            pass
+        if "accuracy" in model_metrics:
+            try:
+                MODEL_ACCURACY.set(model_metrics.get("accuracy"))
+            except Exception:
+                pass
+
+        # Try to load deployed model from models/deployed_model first, fallback to local model files
         deploy_dir = os.path.join("models", "deployed_model")
         loaded = False
         if os.path.exists(deploy_dir):
@@ -49,39 +84,47 @@ try:
                 for f in files:
                     if f.endswith(".pkl") or f.endswith(".joblib"):
                         try:
-                            model = joblib.load(os.path.join(root, f))
+                            new_model = joblib.load(os.path.join(root, f))
+                            model = new_model
                             loaded = True
-                            print("[INFO] Loaded deployed model from", os.path.join(root, f))
+                            print("[INFO] Reloaded deployed model from", os.path.join(root, f))
                             break
                         except Exception as e:
-                            print("Failed to load candidate deployed model:", e)
+                            print("Failed to load candidate deployed model during reload:", e)
                 if loaded:
                     break
-        # fallback to any local model in models/
+
+        # fallback to model files in models/ e.g., {name}_model.pkl
         if not loaded:
-            candidates = [p for p in os.listdir("models") if p.endswith("_model.pkl")]
-            if candidates:
-                try:
-                    model = joblib.load(os.path.join("models", candidates[0]))
-                    loaded = True
-                    print("[INFO] Loaded fallback local model:", candidates[0])
-                except Exception as e:
-                    print("Failed to load fallback model:", e)
-        # model metrics & baseline
-        if "results" in meta:
-            # find metrics for the chosen model
-            for r in meta.get("results", []):
-                if r.get("name") == meta.get("best", {}).get("name"):
-                    model_metrics = r
+            candidates = [p for p in os.listdir("models") if p.endswith("_model.pkl") or p.endswith("_model.joblib")]
+            # prefer file that matches model_name
+            pref = None
+            for c in candidates:
+                if c.startswith(str(model_name)):
+                    pref = c
                     break
-            if "accuracy" in model_metrics:
-                MODEL_ACCURACY.set(model_metrics["accuracy"])
-        if "baseline" in meta:
-            baseline = meta["baseline"]
-    else:
-        print("No model_metadata.json found. App will run but no model loaded.")
-except Exception as e:
-    print("Error while loading model metadata or model:", e)
+            choice = pref or (candidates[0] if candidates else None)
+            if choice:
+                try:
+                    model = joblib.load(os.path.join("models", choice))
+                    loaded = True
+                    print("[INFO] Reloaded fallback model:", choice)
+                except Exception as e:
+                    print("Failed to reload fallback model during metadata update:", e)
+
+    except Exception as e:
+        print("Error while reloading model and metadata:", e)
+
+# initial load at startup
+load_model_and_metadata(force=True)
+
+# Reload metadata (and model) check before each request (lightweight: checks mtime)
+@app.before_request
+def reload_metadata_if_changed():
+    try:
+        load_model_and_metadata(force=False)
+    except Exception:
+        pass
 
 # validation ranges (same as earlier)
 valid_ranges = {
@@ -205,13 +248,13 @@ def predict():
 
         # Append drift report to metadata (cap to last 50 entries)
         try:
-            meta_path = os.path.join("models", "model_metadata.json")
-            meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
+            meta_path_local = os.path.join("models", "model_metadata.json")
+            meta = json.load(open(meta_path_local)) if os.path.exists(meta_path_local) else {}
             meta.setdefault("drift_reports", [])
             entry = {"ts": int(time.time()), "input": input_data, "latency_ms": latency_ms, "drift": drift_report}
             meta["drift_reports"].append(entry)
             meta["drift_reports"] = meta["drift_reports"][-50:]
-            with open(meta_path, "w") as f:
+            with open(meta_path_local, "w") as f:
                 json.dump(meta, f, indent=2)
         except Exception as e:
             print("Failed to write drift report:", e)
@@ -229,9 +272,10 @@ def health():
 
 if __name__ == '__main__':
     import sys
-    sys.stdout.reconfigure(line_buffering=True)
-    sys.stderr.reconfigure(line_buffering=True)
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     print("[INFO] Starting Flask server on port 5000...")
     app.run(host='0.0.0.0', port=5000)
-
-
