@@ -1,5 +1,14 @@
 version: '3.8'
 
+networks:
+  mlops-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  grafana-data:
+  mlflow-artifacts:
+
 services:
   postgres:
     image: postgres:15
@@ -12,47 +21,77 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./scripts/init_governance_db.sql:/docker-entrypoint-initdb.d/init_governance_db.sql
+    networks:
+      - mlops-net
 
   mlflow:
     image: python:3.10-slim
+    container_name: mlops-mlflow
     depends_on:
       - postgres
+    environment:
+      # ensure these are set in your .env or override here
+      - MLFLOW_BACKEND_STORE_URI=${MLFLOW_BACKEND_STORE_URI}
+      - MLFLOW_ARTIFACT_ROOT=${MLFLOW_ARTIFACT_ROOT}
     volumes:
       - ./mlflow_artifacts:/mlflow/artifacts
       - ./:/app
     working_dir: /app
-    command: bash -lc "pip install mlflow psycopg2-binary && mlflow server --backend-store-uri ${MLFLOW_BACKEND_STORE_URI} --default-artifact-root ${MLFLOW_ARTIFACT_ROOT} --host 0.0.0.0 --port 5001"
+    command: >
+      bash -lc "pip install --no-cache-dir mlflow psycopg2-binary &&
+               mlflow server --backend-store-uri ${MLFLOW_BACKEND_STORE_URI} \
+                            --default-artifact-root ${MLFLOW_ARTIFACT_ROOT} \
+                            --host 0.0.0.0 --port 5001 --serve-artifacts"
     ports:
       - "5001:5001"
+    networks:
+      - mlops-net
 
   pushgateway:
     image: prom/pushgateway:v1.5.1
+    container_name: mlops-pushgateway
     ports:
       - "9091:9091"
+    networks:
+      - mlops-net
 
   prometheus:
     image: prom/prometheus:v2.47.0
+    container_name: mlops-prometheus
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
     ports:
       - "9090:9090"
+    networks:
+      - mlops-net
 
   alertmanager:
     image: prom/alertmanager:v0.25.0
+    container_name: mlops-alertmanager
     volumes:
-      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
       - "9093:9093"
+    networks:
+      - mlops-net
 
   grafana:
     image: grafana/grafana-oss:10.0.4
+    container_name: mlops-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      # Optional: allow provisioning to create datasources/dashboards without UI interaction
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
     ports:
       - "3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
-
-volumes:
-  postgres-data:
-  grafana-data:
-  mlflow-artifacts:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - pushgateway
+    networks:
+      - mlops-net
