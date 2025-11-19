@@ -4,11 +4,20 @@ import json
 import shutil
 import mlflow
 from mlflow.tracking import MlflowClient
+from datetime import datetime
 
 MODEL_DIR = os.getenv("MODEL_DIR", "models")
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+
+# Import metrics history
+try:
+    from metrics_history import MetricsHistory
+except ImportError:
+    class MetricsHistory:
+        def __init__(self, *args, **kwargs): pass
+        def add_deployment(self, *args, **kwargs): pass
 
 def resolve_artifact_uri_from_model_version(registry_name, version):
     try:
@@ -43,6 +52,16 @@ def deploy_best(project, stage="Staging"):
     best_name = best.get("name")
     if not best_name:
         raise RuntimeError("No best model found in summary.")
+    
+    # Check if deployment is approved
+    should_deploy = best.get("should_deploy", True)
+    deploy_reason = best.get("deploy_reason", "No deployment reason provided")
+    
+    if not should_deploy:
+        print(f"Deployment blocked: {deploy_reason}")
+        trigger_manual_intervention_alert(best, deploy_reason)
+        return False
+
     registry_name = f"{project}_{best_name}"
 
     versions = []
@@ -78,7 +97,17 @@ def deploy_best(project, stage="Staging"):
                 with open(os.path.join(MODEL_DIR, "model_metadata.json"), "w") as f:
                     json.dump(metadata, f, indent=2)
                 print("[OK] Downloaded artifacts via client.download_artifacts")
-                return
+                
+                # Record successful deployment
+                metrics_history = MetricsHistory()
+                metrics_history.add_deployment({
+                    "model_name": best_name,
+                    "registry_name": registry_name,
+                    "metrics": best,
+                    "stage": stage,
+                    "deployment_reason": deploy_reason
+                })
+                return True
             except Exception as e:
                 print("[WARN] client.download_artifacts failed:", e)
 
@@ -100,7 +129,17 @@ def deploy_best(project, stage="Staging"):
                     with open(os.path.join(MODEL_DIR, "model_metadata.json"), "w") as f:
                         json.dump(metadata, f, indent=2)
                     print("[OK] Downloaded artifacts via client.download_artifacts (tuple path)")
-                    return
+                    
+                    # Record successful deployment
+                    metrics_history = MetricsHistory()
+                    metrics_history.add_deployment({
+                        "model_name": best_name,
+                        "registry_name": registry_name,
+                        "metrics": best,
+                        "stage": stage,
+                        "deployment_reason": deploy_reason
+                    })
+                    return True
                 else:
                     print(f"[INFO] Downloading artifact_uri={resolved} to dst={dst}")
                     local_path = mlflow.artifacts.download_artifacts(artifact_uri=resolved, dst_path=dst)
@@ -109,7 +148,17 @@ def deploy_best(project, stage="Staging"):
                         json.dump(metadata, f, indent=2)
                     print("[OK] Downloaded artifacts to", local_path)
                     print("[OK] Deployment metadata written to models/model_metadata.json")
-                    return
+                    
+                    # Record successful deployment
+                    metrics_history = MetricsHistory()
+                    metrics_history.add_deployment({
+                        "model_name": best_name,
+                        "registry_name": registry_name,
+                        "metrics": best,
+                        "stage": stage,
+                        "deployment_reason": deploy_reason
+                    })
+                    return True
             except Exception as e:
                 print("[WARN] Failed to download artifacts from resolved source:", e)
 
@@ -133,9 +182,40 @@ def deploy_best(project, stage="Staging"):
                 json.dump(metadata, f, indent=2)
         print("[OK] Fallback: copied local model to", deployed)
         print("[OK] Deployment metadata written to models/model_metadata.json")
-        return
+        
+        # Record successful deployment
+        metrics_history = MetricsHistory()
+        metrics_history.add_deployment({
+            "model_name": best_name,
+            "registry_name": registry_name,
+            "metrics": best,
+            "stage": stage,
+            "deployment_reason": deploy_reason
+        })
+        return True
 
     raise RuntimeError(f"No model could be downloaded or found locally for registry_name={registry_name}")
+
+def trigger_manual_intervention_alert(current_best, reason):
+    """Trigger manual review when deployment is blocked"""
+    alert_data = {
+        "timestamp": datetime.now().isoformat(),
+        "current_model": current_best,
+        "block_reason": reason,
+        "requires_manual_review": True
+    }
+    
+    alert_file = os.path.join(MODEL_DIR, "deployment_blocked_alerts.json")
+    alerts = []
+    if os.path.exists(alert_file):
+        with open(alert_file, 'r') as f:
+            alerts = json.load(f)
+    
+    alerts.append(alert_data)
+    with open(alert_file, 'w') as f:
+        json.dump(alerts, f, indent=2)
+    
+    print(f"MANUAL INTERVENTION REQUIRED: {reason}")
 
 if __name__ == "__main__":
     import argparse
@@ -143,5 +223,10 @@ if __name__ == "__main__":
     parser.add_argument("--project", default=os.getenv("PROJECT_NAME", "diabetes"))
     parser.add_argument("--stage", default="Staging")
     args = parser.parse_args()
-    deploy_best(args.project, args.stage)
-
+    
+    success = deploy_best(args.project, args.stage)
+    if success:
+        print("Deployment completed successfully")
+    else:
+        print("Deployment was blocked or failed")
+        exit(1)
