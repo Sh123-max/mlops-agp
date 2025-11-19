@@ -1,10 +1,3 @@
-# app.py
-"""
-Flask app that serves predictions and exposes Prometheus metrics.
-It loads a deployed model (from models/deployed_model or fallback local model),
-records inference latency, input validation errors, prediction counts,
-and writes drift report entries to models/model_metadata.json.
-"""
 from flask import Flask, request, render_template
 import os, json, joblib, numpy as np, time, socket
 from prometheus_client import Gauge, Counter, Histogram
@@ -16,7 +9,6 @@ app = Flask(__name__)
 metrics = PrometheusMetrics(app, path="/metrics")
 HOSTNAME = socket.gethostname()
 
-# Prometheus metrics
 MODEL_INFO = Gauge("model_version_info", "Info about loaded model", ["model_name", "model_version", "host"])
 PREDICTION_COUNT = Counter("prediction_requests_total", "Total prediction requests", ["outcome"])
 INPUT_VALIDATION_ERRORS = Counter("input_validation_errors_total", "Input validation errors counted", ["field"])
@@ -24,35 +16,25 @@ PREDICTION_LATENCY = Histogram("inference_latency_ms", "Model inference latency 
 MODEL_ACCURACY = Gauge("ml_current_model_accuracy", "Accuracy of deployed ML model")
 MODEL_UPTIME = Gauge("model_service_uptime_seconds", "Uptime of model service in seconds")
 
-# global state
 model = None
 model_name = "unknown"
 model_metrics = {}
 baseline = None
 start_time = time.time()
 
-# path & reload state
 meta_path = os.path.join("models", "model_metadata.json")
 last_meta_mtime = None
 
 def load_model_and_metadata(force=False):
-    """
-    Load model_metadata.json and model artifact if available.
-    If force is False, function will check mtime to avoid unnecessary reloads.
-    """
     global model, model_name, model_metrics, baseline, last_meta_mtime
-
     try:
         if not os.path.exists(meta_path):
             return
         mtime = os.path.getmtime(meta_path)
         if not force and last_meta_mtime is not None and mtime == last_meta_mtime:
-            return  # no change
+            return
         last_meta_mtime = mtime
-
         meta = json.load(open(meta_path))
-
-        # update model_name and model_metrics
         model_name = meta.get("model_name", meta.get("best", {}).get("name", model_name))
         model_metrics = {}
         if "results" in meta:
@@ -60,11 +42,8 @@ def load_model_and_metadata(force=False):
                 if r.get("name") == meta.get("best", {}).get("name"):
                     model_metrics = r
                     break
-
         if "baseline" in meta:
             baseline = meta.get("baseline")
-
-        # set prometheus info label (version or 'unknown')
         version = meta.get("version") or (meta.get("best", {}).get("registry") or {}).get("version") or "unknown"
         try:
             MODEL_INFO.labels(model_name=model_name, model_version=str(version), host=HOSTNAME).set(1)
@@ -75,8 +54,6 @@ def load_model_and_metadata(force=False):
                 MODEL_ACCURACY.set(model_metrics.get("accuracy"))
             except Exception:
                 pass
-
-        # Try to load deployed model from models/deployed_model first, fallback to local model files
         deploy_dir = os.path.join("models", "deployed_model")
         loaded = False
         if os.path.exists(deploy_dir):
@@ -93,11 +70,8 @@ def load_model_and_metadata(force=False):
                             print("Failed to load candidate deployed model during reload:", e)
                 if loaded:
                     break
-
-        # fallback to model files in models/ e.g., {name}_model.pkl
         if not loaded:
             candidates = [p for p in os.listdir("models") if p.endswith("_model.pkl") or p.endswith("_model.joblib")]
-            # prefer file that matches model_name
             pref = None
             for c in candidates:
                 if c.startswith(str(model_name)):
@@ -111,14 +85,11 @@ def load_model_and_metadata(force=False):
                     print("[INFO] Reloaded fallback model:", choice)
                 except Exception as e:
                     print("Failed to reload fallback model during metadata update:", e)
-
     except Exception as e:
         print("Error while reloading model and metadata:", e)
 
-# initial load at startup
 load_model_and_metadata(force=True)
 
-# Reload metadata (and model) check before each request (lightweight: checks mtime)
 @app.before_request
 def reload_metadata_if_changed():
     try:
@@ -126,7 +97,6 @@ def reload_metadata_if_changed():
     except Exception:
         pass
 
-# validation ranges (same as earlier)
 valid_ranges = {
     "Pregnancies": (0,20),
     "Glucose": (50,200),
@@ -192,7 +162,6 @@ def predict():
     start = time.time()
     if model is None:
         return render_template('form.html', prediction="Error", probability="Model not loaded", error_messages=["Model missing."], non_diabetic_warnings=[], model_name=model_name, model_metrics=model_metrics)
-
     input_data = []
     error_messages = []
     for key in FEATURE_ORDER:
@@ -207,13 +176,10 @@ def predict():
         except Exception:
             error_messages.append(f"{key} must be numeric")
             INPUT_VALIDATION_ERRORS.labels(field=key).inc()
-
     if error_messages:
         return render_template('form.html', prediction=None, probability=None, error_messages=error_messages, non_diabetic_warnings=[], model_name=model_name, model_metrics=model_metrics)
-
     try:
         sample = np.array([input_data])
-        # Drift detection (single-sample: noisy; for production use mini-batches)
         drift_report = {"psi": {}, "ks": {}, "uncertainty": {}}
         if baseline and "feature_distributions" in baseline:
             for i, fname in enumerate(baseline.get("feature_names", [])):
@@ -229,24 +195,17 @@ def predict():
         else:
             drift_report["psi"] = {}
             drift_report["ks"] = {}
-
         unc = approx_uncertainty_via_perturbation(model, input_data, baseline.get("feature_stds", {}) if baseline else {}, n_rounds=30)
         drift_report["uncertainty"] = unc
-
-        # prediction + latency metric
         with PREDICTION_LATENCY.time():
             pred = model.predict(sample)[0]
             try:
                 proba = model.predict_proba(sample)[0][1] if hasattr(model, "predict_proba") else 0.5
             except Exception:
                 proba = 0.5
-
         latency_ms = (time.time() - start) * 1000.0
-        # prom histogram observed via context manager; additionally log as custom field in metadata
         outcome = "diabetic" if pred == 1 else "not_diabetic"
         PREDICTION_COUNT.labels(outcome=outcome).inc()
-
-        # Append drift report to metadata (cap to last 50 entries)
         try:
             meta_path_local = os.path.join("models", "model_metadata.json")
             meta = json.load(open(meta_path_local)) if os.path.exists(meta_path_local) else {}
@@ -258,7 +217,6 @@ def predict():
                 json.dump(meta, f, indent=2)
         except Exception as e:
             print("Failed to write drift report:", e)
-
         result = "Diabetic" if pred == 1 else "Not Diabetic"
         return render_template('form.html', prediction=result, probability=f"{proba:.1%}", error_messages=[], non_diabetic_warnings=[], model_name=model_name, model_metrics=model_metrics)
     except Exception as e:
