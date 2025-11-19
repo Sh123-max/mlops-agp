@@ -126,7 +126,7 @@ if os.path.exists(summary_path):
     summary = json.load(open(summary_path))
     best = summary.get('best', {})
     if best.get('is_ensemble', False):
-        print('🎯 ENSEMBLE MODEL CREATED: ' + best.get('name', ''))
+        print('ENSEMBLE MODEL CREATED: ' + best.get('name', ''))
         print('Ensemble was created to handle performance drop')
         with open('ensemble_created.txt', 'w') as f:
             f.write('Ensemble created: ' + best.get('name', ''))
@@ -196,9 +196,9 @@ PY
                 sh """
                     # Optional: just check service health via curl (assumes systemd-managed Flask or an already-running Flask)
                     if curl --max-time 5 --silent --fail http://localhost:5000/health; then
-                        echo '[✔] Flask service is healthy!'
+                        echo 'Flask service is healthy!'
                     else
-                        echo '[✘] Flask service did not respond correctly!'
+                        echo 'Flask service did not respond correctly!'
                         exit 1
                     fi
                 """
