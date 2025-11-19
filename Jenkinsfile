@@ -168,6 +168,24 @@ PY
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
                     conda activate ${CONDA_ENV}
                     python3 deploy.py
+
+                    # After deploy.py runs, print the deployed model info (if file exists)
+                    if [ -f "${MODEL_DIR}/model_metadata.json" ]; then
+                        python3 - <<'PY'
+import json, os, sys
+p = os.path.join("${MODEL_DIR}", "model_metadata.json")
+try:
+    m = json.load(open(p))
+    name = m.get('model_name') or m.get('best', {}).get('name') or 'unknown'
+    version = m.get('version') or (m.get('best', {}).get('registry') or {}).get('version') or 'N/A'
+    print(f"JENKINS: Deployed model -> name={name} version={version}")
+except Exception as e:
+    print("JENKINS: Failed to parse model_metadata.json:", e)
+    sys.exit(0)
+PY
+                    else
+                        echo "JENKINS: model_metadata.json not present after deployment"
+                    fi
                 """
             }
         }
