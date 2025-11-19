@@ -1,24 +1,25 @@
-# alert_rules.yml
 groups:
   - name: mlops-flask-alerts
     rules:
       - alert: HighPredictionLatencyP99
-        expr: histogram_quantile(0.99, sum(rate(prediction_latency_seconds_bucket[5m])) by (le)) > 1
+        expr: histogram_quantile(0.99, sum(rate(inference_latency_ms_bucket[5m])) by (le))
+              > 1000
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "High P99 prediction latency"
-          description: "P99 prediction latency > 1s for more than 2 minutes."
+          description: "P99 prediction latency > 1000 ms for more than 2 minutes."
 
       - alert: HighPredictionLatencyP90
-        expr: histogram_quantile(0.90, sum(rate(prediction_latency_seconds_bucket[5m])) by (le)) > 0.5
+        expr: histogram_quantile(0.90, sum(rate(inference_latency_ms_bucket[5m])) by (le))
+              > 500
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "High P90 prediction latency"
-          description: "P90 prediction latency > 0.5s for more than 5 minutes."
+          description: "P90 prediction latency > 500 ms for more than 5 minutes."
 
       - alert: HighRequestExceptions
         expr: increase(flask_http_request_exceptions_total[5m]) > 0
@@ -30,9 +31,10 @@ groups:
           description: "There were one or more uncaught exceptions in the last 5 minutes."
 
       - alert: HighErrorRate5m
-        expr: rate(flask_http_request_total[5m]) > 0 and
-              (sum by (status)(rate(flask_http_request_total[5m])) - sum by (status)(rate(flask_http_request_total{status=~"2.."}[5m]))) 
-              / sum(rate(flask_http_request_total[5m])) > 0.05
+        expr: |
+          (
+            sum(rate(flask_http_request_total[5m])) - sum(rate(flask_http_request_total{status=~"2.."}[5m]))
+          ) / sum(rate(flask_http_request_total[5m])) > 0.05
         for: 2m
         labels:
           severity: critical
@@ -66,4 +68,3 @@ groups:
         annotations:
           summary: "model_weighted_score not present"
           description: "No model_weighted_score metric found from Pushgateway for 60 minutes. This may be okay if no training has run recently."
-
