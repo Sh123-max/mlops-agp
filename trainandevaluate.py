@@ -242,6 +242,7 @@ def train_and_log(name, model):
             mlflow.log_metric("roc_auc", float(roc))
             mlflow.log_metric("weighted_score", float(weighted))
             mlflow.log_metric("retrain_time_seconds", float(retrain_time))
+            # inference_latency_sec logged as seconds internally
             mlflow.log_metric("inference_latency_sec", float(latency))
             mlflow.log_metric("model_size_bytes", float(model_size))
             mlflow.log_metric("false_negative_rate", float(fn_rate))
@@ -277,7 +278,7 @@ def train_and_log(name, model):
                 "roc_auc": roc,
                 "weighted_score": weighted,
                 "retrain_time_seconds": retrain_time,
-                "latency": latency,
+                "latency": latency,  # seconds
                 "model_size": model_size,
                 "false_negative_rate": fn_rate
             }
@@ -500,6 +501,7 @@ except Exception as e:
 if PUSHGATEWAY_URL and best.get("name") and should_deploy:
     try:
         payload_lines = []
+        # main model score
         payload_lines.append(f'model_weighted_score{{project="{PROJECT_NAME}",model="{best["name"]}"}} {best["score"]}')
         chosen_res = None
         for r in results:
@@ -507,9 +509,17 @@ if PUSHGATEWAY_URL and best.get("name") and should_deploy:
                 chosen_res = r
                 break
         if chosen_res:
+            # retrain time (seconds)
             payload_lines.append(f'retrain_time_seconds{{project="{PROJECT_NAME}",model="{best["name"]}"}} {chosen_res.get("retrain_time_seconds", -1)}')
+            # false negative rate
             payload_lines.append(f'false_negative_rate{{project="{PROJECT_NAME}",model="{best["name"]}"}} {chosen_res.get("false_negative_rate", -1)}')
-            payload_lines.append(f'inference_latency_seconds{{project="{PROJECT_NAME}",model="{best["name"]}"}} {chosen_res.get("latency", -1)}')
+            # inference latency: convert seconds -> milliseconds before pushing
+            latency_sec = chosen_res.get("latency", -1)
+            try:
+                latency_ms = float(latency_sec) * 1000.0 if latency_sec is not None and float(latency_sec) >= 0 else -1
+            except Exception:
+                latency_ms = -1
+            payload_lines.append(f'inference_latency_ms{{project="{PROJECT_NAME}",model="{best["name"]}"}} {latency_ms}')
         payload = "\n".join(payload_lines) + "\n"
         job = f"{PROJECT_NAME}_modelmonitor"
         resp = requests.post(f"{PUSHGATEWAY_URL}/metrics/job/{job}", data=payload, timeout=10)
