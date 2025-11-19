@@ -72,7 +72,7 @@ def deploy_best(project, stage="Staging"):
     os.makedirs(dst, exist_ok=True)
     metadata = {"model_name": best_name, "registry_name": registry_name, "version": None, "source": None, "deployed_path": None}
     if is_ensemble_model(best_name):
-        print(f"🔗 Loading ensemble model: {best_name}")
+        print(f"Loading ensemble model: {best_name}")
         ensemble_path = os.path.join(MODEL_DIR, f"{best_name}_model.pkl")
         if os.path.exists(ensemble_path):
             try:
@@ -95,9 +95,9 @@ def deploy_best(project, stage="Staging"):
                     json.dump(metadata, f, indent=2)
                 return True
             except Exception as e:
-                print(f"❌ Failed to load ensemble model: {e}")
+                print(f"Failed to load ensemble model: {e}")
         else:
-            print(f"❌ Ensemble model file not found: {ensemble_path}")
+            print(f"Ensemble model file not found: {ensemble_path}")
     if versions:
         selected = versions[0]
         metadata["version"] = selected.version
