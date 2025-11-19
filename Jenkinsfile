@@ -118,20 +118,21 @@ PY
             steps {
                 echo "Checking if ensemble was created..."
                 sh """
-                    python3 -c "
-                    import json, os
-                    summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
-                    if os.path.exists(summary_path):
-                        summary = json.load(open(summary_path))
-                        best = summary.get('best', {})
-                        if best.get('is_ensemble', False):
-                            print('🎯 ENSEMBLE MODEL CREATED: ' + best.get('name', ''))
-                            print('Ensemble was created to handle performance drop')
-                            with open('ensemble_created.txt', 'w') as f:
-                                f.write('Ensemble created: ' + best.get('name', ''))
-                        else:
-                            print('No ensemble created - performance maintained')
-                    "
+                    python3 - <<-'PY'
+import json, os
+
+summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
+if os.path.exists(summary_path):
+    summary = json.load(open(summary_path))
+    best = summary.get('best', {})
+    if best.get('is_ensemble', False):
+        print('🎯 ENSEMBLE MODEL CREATED: ' + best.get('name', ''))
+        print('Ensemble was created to handle performance drop')
+        with open('ensemble_created.txt', 'w') as f:
+            f.write('Ensemble created: ' + best.get('name', ''))
+    else:
+        print('No ensemble created - performance maintained')
+PY
                 """
             }
             post {
