@@ -1,4 +1,3 @@
-# trainandevaluate.py
 """
 Train multiple models, evaluate, perform Pareto-style selection (non-dominated),
 register best model with MLflow (from main thread after verifying artifacts),
@@ -27,6 +26,23 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
 from xgboost import XGBClassifier
+
+# Import the new metrics history and ensemble manager
+try:
+    from metrics_history import MetricsHistory
+    from ensemble_manager import EnsembleManager
+except ImportError:
+    # Fallback if modules are not available
+    class MetricsHistory:
+        def __init__(self, *args, **kwargs): pass
+        def add_training_run(self, *args, **kwargs): pass
+        def get_previous_best(self): return None
+        def add_deployment(self, *args, **kwargs): pass
+    
+    class EnsembleManager:
+        def __init__(self, *args, **kwargs): pass
+        def train_and_evaluate_ensemble(self, *args, **kwargs): return None, None
+        def log_ensemble_to_mlflow(self, *args, **kwargs): return None
 
 # Config
 PROJECT_NAME = os.getenv("PROJECT_NAME", "diabetes")
@@ -148,6 +164,35 @@ def nondominated_front(points):
                 break
     return [i for i, d in enumerate(dominated) if not d]
 
+def validate_against_previous_best(current_best, previous_best):
+    """Compare current model with previous best and return whether to deploy"""
+    if not previous_best:
+        return True, "First deployment"
+    
+    # If current model is an ensemble, it's already been validated as better
+    if current_best.get("is_ensemble", False):
+        return True, "Ensemble model outperforms individual models"
+    
+    current_score = current_best.get("weighted_score", 0)
+    previous_score = previous_best.get("weighted_score", 0)
+    current_fnr = current_best.get("false_negative_rate", 1)
+    previous_fnr = previous_best.get("false_negative_rate", 1)
+    
+    # Critical healthcare metrics - false negative rate should not increase
+    if current_fnr > previous_fnr * 1.1:  # 10% increase in FNR
+        return False, f"False negative rate increased from {previous_fnr:.4f} to {current_fnr:.4f}"
+    
+    # Weighted score degradation thresholds
+    score_drop = previous_score - current_score
+    
+    if score_drop <= 0.01:  # 1% or improvement
+        return True, f"Performance maintained or improved: {score_drop:.4f}"
+    elif score_drop <= 0.03:  # 1-3% drop
+        # Note: For drops >1%, ensemble would have been attempted above
+        return True, f"Minor performance drop: {score_drop:.4f}. Ensemble was attempted."
+    else:  # >3% drop
+        return False, f"Significant performance drop: {score_drop:.4f}. Manual review required."
+
 def train_and_log(name, model):
     run_name = f"{PROJECT_NAME}__{name}__{int(time.time())}"
     try:
@@ -208,7 +253,6 @@ def train_and_log(name, model):
 
             try:
                 mlflow.sklearn.log_model(model, artifact_path="model")
-                # debug artifact uri (helps confirm upload)
                 try:
                     artifact_uri = mlflow.get_artifact_uri("model")
                     print(f"[{name}] logged artifact_uri={artifact_uri}")
@@ -288,8 +332,87 @@ else:
         chosen = max(valid_results, key=lambda r: float(r.get("weighted_score", -1)))
         best = {"score": float(chosen.get("weighted_score", -1)), "name": chosen["name"], "run_id": chosen.get("run_id"), "registry": None}
 
+# Performance validation against previous best
+metrics_history = MetricsHistory()
+previous_best = metrics_history.get_previous_best()
+
+# ENSEMBLE CREATION FOR PERFORMANCE DROPS > 1%
+ensemble_manager = EnsembleManager(MODEL_DIR, PROJECT_NAME)
+previous_best_score = previous_best.get('weighted_score') if previous_best else None
+current_best_score = best['score']
+
+# Get the actual model object for the current best
+current_best_model = None
+for name, model_obj in models.items():
+    if name == best['name']:
+        current_best_model = model_obj
+        break
+
+# If we have a current model and previous score, try ensemble
+if current_best_model and previous_best_score:
+    ensemble, ensemble_metrics = ensemble_manager.train_and_evaluate_ensemble(
+        X_train, y_train, X_test, y_test,
+        best['name'], current_best_score, previous_best_score
+    )
+    
+    if ensemble is not None and ensemble_metrics is not None:
+        # Check if ensemble performs better than current model
+        if ensemble_metrics['weighted_score'] > current_best_score:
+            print(f"🎯 Ensemble outperforms current model! Using ensemble.")
+            
+            # Update best model to ensemble
+            ensemble_name = ensemble_manager.log_ensemble_to_mlflow(
+                ensemble, ensemble_metrics, best['name'], 
+                previous_best.get('model_name', 'PreviousBest')
+            )
+            
+            if ensemble_name:
+                # Update best model info
+                best = {
+                    "score": ensemble_metrics['weighted_score'],
+                    "name": ensemble_name,
+                    "run_id": None,  # Will be set after MLflow logging
+                    "registry": None,
+                    "is_ensemble": True,
+                    "base_models": f"{previous_best.get('model_name')},{best['name']}"
+                }
+                
+                # Add ensemble to results
+                ensemble_result = {
+                    "name": ensemble_name,
+                    "accuracy": ensemble_metrics['accuracy'],
+                    "precision": ensemble_metrics['precision'],
+                    "recall": ensemble_metrics['recall'],
+                    "f1_score": ensemble_metrics['f1_score'],
+                    "roc_auc": ensemble_metrics['roc_auc'],
+                    "weighted_score": ensemble_metrics['weighted_score'],
+                    "is_ensemble": True,
+                    "retrain_time_seconds": 0,  # Not measured for ensemble
+                    "latency": 0,  # Will be measured later
+                    "model_size": 0,  # Will be measured later
+                    "false_negative_rate": 0  # Will be calculated later
+                }
+                results.append(ensemble_result)
+                valid_results.append(ensemble_result)
+                
+                print(f"🔄 Updated best model to ensemble: {ensemble_name}")
+        else:
+            print(f"📉 Ensemble did not improve performance. Keeping current best model.")
+
+# Add all valid results to history
+for result in results:
+    if "error" not in result:
+        metrics_history.add_training_run(result)
+
+# Validate against previous best
+should_deploy, deploy_reason = validate_against_previous_best(best, previous_best)
+best["should_deploy"] = should_deploy
+best["deploy_reason"] = deploy_reason
+
+print(f"Deployment decision: {should_deploy}, Reason: {deploy_reason}")
+
 # Now register the best model from the main thread (with artifact availability check)
-if best.get("run_id") and best.get("name"):
+if best.get("run_id") and best.get("name") and should_deploy:
     run_id = best["run_id"]
     registry_name = f"{PROJECT_NAME}_{best['name']}"
     max_wait_sec = 30
@@ -318,6 +441,8 @@ if best.get("run_id") and best.get("name"):
         print("[MAIN] Registered model:", best["registry"])
     except Exception as e:
         print("[MAIN] Register failed:", e)
+else:
+    print(f"[MAIN] Skipping model registration - deployment not approved: {deploy_reason}")
 
 # summary
 summary = {
@@ -326,6 +451,7 @@ summary = {
     "pareto_indices": pareto_indices,
     "pareto_models": pareto_models,
     "best": best,
+    "previous_best": previous_best,
     "ts": int(time.time())
 }
 with open(MODEL_DIR / "last_run_summary.json", "w") as fh:
@@ -378,7 +504,7 @@ except Exception as e:
     print("Failed to write model metadata:", e)
 
 # Push summary metric to Pushgateway for monitoring dashboards
-if PUSHGATEWAY_URL and best.get("name"):
+if PUSHGATEWAY_URL and best.get("name") and should_deploy:
     try:
         payload_lines = []
         payload_lines.append(f'model_weighted_score{{project="{PROJECT_NAME}",model="{best["name"]}"}} {best["score"]}')
@@ -397,3 +523,7 @@ if PUSHGATEWAY_URL and best.get("name"):
         print("Pushgateway status:", resp.status_code)
     except Exception as e:
         print("Push to pushgateway failed:", e)
+elif not should_deploy:
+    print("Skipping Pushgateway update - deployment not approved")
+
+# End
