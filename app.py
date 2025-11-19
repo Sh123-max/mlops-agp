@@ -24,6 +24,10 @@ PREDICTION_LATENCY = Histogram("inference_latency_ms", "Model inference latency 
 MODEL_ACCURACY = Gauge("ml_current_model_accuracy", "Accuracy of deployed ML model")
 MODEL_UPTIME = Gauge("model_service_uptime_seconds", "Uptime of model service in seconds")
 
+# Extra Prometheus gauges for deployment metadata (set from models/model_metadata.json)
+MODEL_DEPLOYED_TS = Gauge("model_deployed_timestamp", "Unix timestamp when model was generated/deployed", ["model_name", "model_version"])
+MODEL_WEIGHTED_SCORE = Gauge("model_weighted_score_gauge", "Last known model weighted score (from training)", ["model_name"])
+
 # global state
 model = None
 model_name = "unknown"
@@ -75,6 +79,22 @@ def load_model_and_metadata(force=False):
                 MODEL_ACCURACY.set(model_metrics.get("accuracy"))
             except Exception:
                 pass
+
+        # set model deployed timestamp and weighted score (if present)
+        try:
+            gen_ts = meta.get("generated_at") or meta.get("best", {}).get("ts")
+            if gen_ts:
+                MODEL_DEPLOYED_TS.labels(model_name=model_name, model_version=str(version)).set(float(gen_ts))
+        except Exception:
+            pass
+
+        try:
+            # if best weighted_score available
+            best_meta = meta.get("best", {})
+            if best_meta and "score" in best_meta:
+                MODEL_WEIGHTED_SCORE.labels(model_name=model_name).set(float(best_meta.get("score", 0.0)))
+        except Exception:
+            pass
 
         # Try to load deployed model from models/deployed_model first, fallback to local model files
         deploy_dir = os.path.join("models", "deployed_model")
