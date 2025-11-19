@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""
-evaluate_drift_full.py
-
-Compute:
- - accuracy_after_drift (on labeled new data)
- - per-feature PSI (Population Stability Index)
- - per-feature KS test (statistic + p-value)
- - dataset-level uncertainty via perturbation (entropy)
- - aggregate drift score (weighted)
-Log metrics to MLflow, push key gauges to Pushgateway, and append report to models/model_metadata.json.
-
-Usage:
-python3 evaluate_drift_full.py --data data/recent_7_days.csv \
-    --pushgateway http://localhost:9091 --mlflow http://localhost:5001
-
-"""
 
 import os, sys, json, argparse, glob, joblib, math, time
 import numpy as np
@@ -24,22 +8,18 @@ import mlflow
 from prometheus_client import Gauge, CollectorRegistry, push_to_gateway
 from scipy.stats import ks_2samp
 
-# Metric names
 METRIC_ACC = "accuracy_after_drift"
 METRIC_MEAN_ENTROPY = "mean_prediction_entropy"
 METRIC_AGG_DRIFT = "aggregate_drift_score"
 
-# Create process-level gauges (only used if pushgateway not supplied)
 _g_acc = Gauge(METRIC_ACC, "Model accuracy after drift")
 _g_entropy = Gauge(METRIC_MEAN_ENTROPY, "Mean prediction entropy after perturbation")
 _g_agg = Gauge(METRIC_AGG_DRIFT, "Aggregate drift score")
 
-# PSI helper
 def calculate_psi(expected, actual, buckets=10):
     try:
         expected = np.asarray(expected).astype(float)
         actual = np.asarray(actual).astype(float)
-        # build quantile bins based on expected
         quantiles = np.percentile(expected, np.linspace(0,100,buckets+1))
         quantiles[0] -= 1e-6
         quantiles[-1] += 1e-6
@@ -53,23 +33,14 @@ def calculate_psi(expected, actual, buckets=10):
         return float("nan")
 
 def approx_uncertainty_via_perturbation(model, X, baseline_stds, n_rounds=30):
-    """
-    For each sample compute predictive probability distribution by perturbing inputs by
-    small noise proportional to baseline_stds. Returns mean entropy across samples and
-    per-sample summary.
-    """
     n_samples = X.shape[0]
     entropies = []
     mean_probs = []
     std_probs = []
     if not hasattr(model, "predict_proba"):
-        # fallback: use decision_function to approximate probabilities if possible? else constant
         return {"mean_entropy": 0.0, "mean_proba": 0.5, "std_proba": 0.0, "per_sample": []}
-
-    # prepare stds array shape=(n_features,)
     stds_arr = np.array([baseline_stds.get(fname, 1.0) for fname in baseline_feature_names]) if baseline_feature_names else np.ones(X.shape[1])
     stds_arr = np.where(stds_arr <= 0, 1e-6, stds_arr)
-
     per_sample = []
     for i in range(n_samples):
         probs = []
@@ -85,7 +56,6 @@ def approx_uncertainty_via_perturbation(model, X, baseline_stds, n_rounds=30):
         probs = np.array(probs)
         mean_p = float(probs.mean())
         std_p = float(probs.std())
-        # entropy for Bernoulli
         if mean_p <= 0 or mean_p >= 1:
             entropy = 0.0
         else:
@@ -96,7 +66,6 @@ def approx_uncertainty_via_perturbation(model, X, baseline_stds, n_rounds=30):
         std_probs.append(std_p)
     return {"mean_entropy": float(np.mean(entropies)), "mean_proba": float(np.mean(mean_probs)), "std_proba": float(np.mean(std_probs)), "per_sample": per_sample}
 
-# Model / artifact discovery helpers (reuse your existing logic)
 def find_deployed_model(models_dir="models"):
     deployed_dir = os.path.join(models_dir, "deployed_model")
     if os.path.exists(deployed_dir):
@@ -121,7 +90,6 @@ def load_model(model_path=None):
     return model, p
 
 def load_scaler_and_baseline(data_dir="data", models_dir="models"):
-    # try model_metadata.json first for baseline distributions
     baseline = None
     md_path = os.path.join(models_dir, "model_metadata.json")
     if os.path.exists(md_path):
@@ -132,7 +100,6 @@ def load_scaler_and_baseline(data_dir="data", models_dir="models"):
                 print("[INFO] Loaded baseline from models/model_metadata.json")
         except Exception as e:
             print("[WARN] Failed to load models/model_metadata.json:", e)
-    # fallback to data/scaler.pkl or models/scaler.pkl and X_train_unscaled_df
     scaler = None
     scaler_paths = [os.path.join(data_dir, "scaler.pkl"), os.path.join(models_dir, "scaler.pkl")]
     for p in scaler_paths:
@@ -143,7 +110,6 @@ def load_scaler_and_baseline(data_dir="data", models_dir="models"):
                 break
             except Exception as e:
                 print("[WARN] Failed to load scaler at", p, e)
-    # try X_train_unscaled_df
     X_train_unscaled = None
     p_unscaled = os.path.join(data_dir, "X_train_unscaled_df.pkl")
     if os.path.exists(p_unscaled):
@@ -184,14 +150,12 @@ def append_report_to_metadata(report, models_dir="models"):
             existing = {}
     existing.setdefault("drift_reports", [])
     existing["drift_reports"].append(report)
-    # keep last 100 entries
     existing["drift_reports"] = existing["drift_reports"][-100:]
     with open(path, "w") as f:
         json.dump(existing, f, indent=2)
     print("[INFO] Appended drift report to", path)
 
 def normalize_psi(psi):
-    # rough normalization to [0,1] where higher indicates worse drift
     if psi <= 0.05:
         return 0.0
     if psi < 0.1:
@@ -201,32 +165,28 @@ def normalize_psi(psi):
     return 1.0
 
 def normalize_ks(stat, pval):
-    # pval small => significant difference. stat in [0,1]. return [0,1] where higher => worse
     return float(min(1.0, stat))
 
-# Main
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", required=True, help="CSV path for new (recent) labeled data with Outcome column")
-    parser.add_argument("--model-path", default=None, help="optional explicit model path")
-    parser.add_argument("--pushgateway", default=os.getenv("PUSHGATEWAY_URL", None), help="Pushgateway URL")
-    parser.add_argument("--mlflow", default=os.getenv("MLFLOW_TRACKING_URI", None), help="MLflow tracking URI")
-    parser.add_argument("--data-dir", default=os.getenv("DATA_DIR", "data"), help="DATA_DIR for scaler / unscaled df")
-    parser.add_argument("--n-perturb", type=int, default=30, help="perturbation rounds per sample")
+    parser.add_argument("--data", required=True)
+    parser.add_argument("--model-path", default=None)
+    parser.add_argument("--pushgateway", default=os.getenv("PUSHGATEWAY_URL", None))
+    parser.add_argument("--mlflow", default=os.getenv("MLFLOW_TRACKING_URI", None))
+    parser.add_argument("--data-dir", default=os.getenv("DATA_DIR", "data"))
+    parser.add_argument("--n-perturb", type=int, default=30)
     parser.add_argument("--psi-buckets", type=int, default=10)
-    parser.add_argument("--agg-weights", default=None, help="json string for weights e.g. '{\"acc\":0.5,\"psi\":0.2,\"ks\":0.15,\"entropy\":0.15}'")
-    parser.add_argument("--alert-threshold", type=float, default=0.5, help="aggregate drift score threshold to trigger non-zero exit")
+    parser.add_argument("--agg-weights", default=None)
+    parser.add_argument("--alert-threshold", type=float, default=0.5)
     args = parser.parse_args()
 
     if args.mlflow:
         mlflow.set_tracking_uri(args.mlflow)
         print("[INFO] MLflow tracking URI:", mlflow.get_tracking_uri())
 
-    # load model & artifacts
     model, model_file = load_model(args.model_path)
     scaler, baseline, X_train_unscaled_df = load_scaler_and_baseline(args.data_dir)
 
-    # baseline feature names and distributions
     baseline_feature_names = None
     baseline_feature_distributions = {}
     baseline_feature_stds = {}
@@ -243,9 +203,7 @@ if __name__ == "__main__":
                 baseline_feature_stds[c] = float(np.nanstd(arr))
             print("[INFO] Built baseline distributions from X_train_unscaled_df")
         elif scaler is not None:
-            # fallback: if scaler exists but unscaled df not present, use scaler mean/stdev approx (not ideal)
             try:
-                # scaler may be StandardScaler with mean_ and scale_
                 means = getattr(scaler, "mean_", None)
                 scales = getattr(scaler, "scale_", None)
                 if means is not None and scales is not None:
@@ -256,12 +214,10 @@ if __name__ == "__main__":
             except Exception as e:
                 print("[WARN] Could not extract baseline from scaler:", e)
 
-    # load new data
     X_df, y, df_new = load_data(args.data)
     feature_names = list(X_df.columns)
     X_vals = X_df.values
 
-    # optionally apply scaler (if scaler present)
     if scaler is not None:
         try:
             X_scaled_vals = scaler.transform(X_vals)
@@ -273,7 +229,6 @@ if __name__ == "__main__":
     else:
         X_for_model = X_vals
 
-    # compute accuracy
     try:
         y_pred = model.predict(X_for_model)
         acc = float(accuracy_score(y, y_pred))
@@ -282,20 +237,16 @@ if __name__ == "__main__":
         print("[ERROR] Prediction failed:", e)
         sys.exit(2)
 
-    # compute PSI & KS per feature (use baseline distributions if available; else compute from X_train_unscaled_df if names align)
     psi_results = {}
     ks_results = {}
     for i, fname in enumerate(feature_names):
         new_vals = X_df[fname].dropna().values.astype(float)
-        # choose baseline array
         if baseline_feature_distributions and str(fname) in baseline_feature_distributions:
             base_arr = np.array(baseline_feature_distributions[str(fname)])
         else:
-            # best-effort: if X_train_unscaled_df present and columns match
             if X_train_unscaled_df is not None and fname in X_train_unscaled_df.columns:
                 base_arr = np.array(X_train_unscaled_df[fname].dropna().values)
             else:
-                # fallback: cannot compute PSI/KS reliably
                 psi_results[fname] = {"psi": float("nan")}
                 ks_results[fname] = {"ks_stat": float("nan"), "pval": float("nan")}
                 continue
@@ -307,25 +258,20 @@ if __name__ == "__main__":
         except Exception:
             ks_results[fname] = {"ks_stat": float("nan"), "pval": float("nan")}
 
-    # approximate uncertainty via perturbation
-    # For perturbation we need baseline stds keyed by feature names
     baseline_stds_map = {}
     if baseline_feature_stds:
         for k, v in baseline_feature_stds.items():
             baseline_stds_map[k] = float(v)
     else:
-        # fallback: compute std from X_train_unscaled_df if available
         if X_train_unscaled_df is not None:
             for c in X_train_unscaled_df.columns:
                 baseline_stds_map[c] = float(np.nanstd(X_train_unscaled_df[c].dropna().values))
-    # prepare baseline_feature_names variable for the function scope
+
     baseline_feature_names = list(baseline_feature_distributions.keys()) if baseline_feature_distributions else (list(X_train_unscaled_df.columns) if X_train_unscaled_df is not None else None)
 
     uq_res = approx_uncertainty_via_perturbation(model, X_for_model, baseline_stds_map, n_rounds=args.n_perturb)
     mean_entropy = float(uq_res.get("mean_entropy", 0.0))
 
-    # Build normalized/aggregated drift signals
-    # Normalize psi and ks per feature to [0,1], then average across features
     psi_norms = []
     ks_norms = []
     for fname in feature_names:
@@ -338,7 +284,6 @@ if __name__ == "__main__":
     mean_psi_norm = float(np.mean(psi_norms)) if psi_norms else 0.0
     mean_ks_norm = float(np.mean(ks_norms)) if ks_norms else 0.0
 
-    # Prepare aggregation weights (defaults)
     if args.agg_weights:
         try:
             weights = json.loads(args.agg_weights)
@@ -349,18 +294,14 @@ if __name__ == "__main__":
     if not weights:
         weights = {"acc":0.4, "psi":0.2, "ks":0.2, "entropy":0.2}
 
-    # We want higher aggregate => worse. accuracy is inverse (higher accuracy is better) so we use (1-acc)
     score_acc = 1.0 - acc
     score_psi = mean_psi_norm
     score_ks = mean_ks_norm
-    # normalize entropy roughly to [0,1] by mapping typical entropy scale (0..~0.7 for binary)
-    # we'll cap at 0.7
     score_entropy = min(1.0, mean_entropy / 0.7)
 
     aggregate_score = (weights["acc"]*score_acc + weights["psi"]*score_psi + weights["ks"]*score_ks + weights["entropy"]*score_entropy) / (sum(weights.values()) or 1.0)
     aggregate_score = float(aggregate_score)
 
-    # Build a report
     ts = int(time.time())
     report = {
         "ts": ts,
@@ -379,42 +320,34 @@ if __name__ == "__main__":
 
     print("[INFO] Drift report summary:", json.dumps(report, indent=2))
 
-    # Log to MLflow
     if args.mlflow:
         try:
             with mlflow.start_run(run_name="drift_full_eval") as run:
                 mlflow.log_metric(METRIC_ACC, acc)
                 mlflow.log_metric(METRIC_MEAN_ENTROPY, mean_entropy)
                 mlflow.log_metric(METRIC_AGG_DRIFT, aggregate_score)
-                # also log mean psi/ks
                 mlflow.log_metric("mean_psi_norm", mean_psi_norm)
                 mlflow.log_metric("mean_ks_norm", mean_ks_norm)
                 mlflow.set_tag("drift_eval_source", os.path.basename(args.data))
                 mlflow.log_param("model_file", os.path.basename(model_file))
-                # log per-feature small summary as artifact
                 mlflow.log_text(json.dumps(report, indent=2), "drift_report.json")
                 print("[INFO] Logged drift metrics to MLflow")
         except Exception as e:
             print("[WARN] MLflow logging failed:", e)
 
-    # Push to Pushgateway key metrics
     if args.pushgateway:
         push_metric(args.pushgateway, METRIC_ACC, acc, job="drift-eval")
         push_metric(args.pushgateway, METRIC_MEAN_ENTROPY, mean_entropy, job="drift-eval")
         push_metric(args.pushgateway, METRIC_AGG_DRIFT, aggregate_score, job="drift-eval")
     else:
-        # set local gauges
         _g_acc.set(acc)
         _g_entropy.set(mean_entropy)
         _g_agg.set(aggregate_score)
 
-    # append to models/model_metadata.json drift_reports
     append_report_to_metadata(report)
 
-    # optionally alert by non-zero exit if aggregate exceeds threshold
     if aggregate_score >= args.alert_threshold:
         print(f"[ALERT] Aggregate drift score {aggregate_score:.4f} >= threshold {args.alert_threshold}")
-        # exit non-zero to let CI/pipeline detect failure/need-to-retrain
         sys.exit(3)
     else:
         print(f"[OK] Aggregate drift score {aggregate_score:.4f} below threshold {args.alert_threshold}")
