@@ -397,6 +397,3 @@ if PUSHGATEWAY_URL and best.get("name"):
         print("Pushgateway status:", resp.status_code)
     except Exception as e:
         print("Push to pushgateway failed:", e)
-
-# End
-
