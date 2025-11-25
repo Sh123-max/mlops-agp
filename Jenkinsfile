@@ -2,13 +2,18 @@ pipeline {
     agent any
 
     environment {
+        # base defaults - Jenkins will override per-stage for parallel runs
+        BASE_MODEL_DIR = "${env.BASE_MODEL_DIR ?: 'models'}"
+        BASE_DATA_DIR  = "${env.BASE_DATA_DIR ?: 'data'}"
         PROJECT_NAME = "${env.PROJECT_NAME ?: 'diabetes'}"
         DATA_DIR    = "${env.DATA_DIR ?: 'data'}"
         MODEL_DIR   = "${env.MODEL_DIR ?: 'models'}"
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
         CONDA_PATH  = "/home/shreekar/miniconda3"
         CONDA_ENV   = "mlops-agp"
-        FLASK_SERVICE = "mlops-flask.service"
+        # names for systemd services used to run flask apps
+        DIABETES_SERVICE = "mlops-diabetes.service"
+        HEART_SERVICE    = "mlops-heart.service"
     }
 
     options {
@@ -18,7 +23,6 @@ pipeline {
     }
 
     stages {
-
         stage('Check changes (data)') {
             steps {
                 script {
@@ -31,47 +35,69 @@ pipeline {
 
         stage('Run Both Projects (diabetes & heart)') {
             parallel {
-
                 stage('diabetes') {
+                    environment {
+                        PROJECT_NAME = "diabetes"
+                        DATA_DIR = "${env.BASE_DATA_DIR}/diabetes"
+                        MODEL_DIR = "${env.BASE_MODEL_DIR}/diabetes"
+                    }
                     steps {
-                        echo "Running preprocessing + training for DIABETES..."
+                        echo "Running preprocessing + training for DIABETES (DATA_DIR=${env.DATA_DIR}, MODEL_DIR=${env.MODEL_DIR})..."
                         sh """
                             set -e
+                            mkdir -p ${DATA_DIR} ${MODEL_DIR}
                             . ${CONDA_PATH}/etc/profile.d/conda.sh
                             conda activate ${CONDA_ENV}
 
-                            export PROJECT_NAME=diabetes
+                            export PROJECT_NAME=${PROJECT_NAME}
+                            export DATA_DIR=${DATA_DIR}
+                            export MODEL_DIR=${MODEL_DIR}
+                            export MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+
                             python3 preprocess.py
-                            python3 trainandevaluate.py 2>&1 | tee diabetes_train_log.txt
+                            python3 trainandevaluate.py 2>&1 | tee diabetes_train_log.txt || true
                         """
                     }
                     post {
                         always {
                             archiveArtifacts artifacts: 'diabetes_train_log.txt', allowEmptyArchive: true, fingerprint: true
+                            sh "cp -v ${MODEL_DIR}/last_run_summary.json . || true"
+                            archiveArtifacts artifacts: 'last_run_summary.json', allowEmptyArchive: true
                         }
                     }
                 }
 
                 stage('heart') {
+                    environment {
+                        PROJECT_NAME = "heart"
+                        DATA_DIR = "${env.BASE_DATA_DIR}/heart"
+                        MODEL_DIR = "${env.BASE_MODEL_DIR}/heart"
+                    }
                     steps {
-                        echo "Running preprocessing + training for HEART..."
+                        echo "Running preprocessing + training for HEART (DATA_DIR=${env.DATA_DIR}, MODEL_DIR=${env.MODEL_DIR})..."
                         sh """
                             set -e
+                            mkdir -p ${DATA_DIR} ${MODEL_DIR}
                             . ${CONDA_PATH}/etc/profile.d/conda.sh
                             conda activate ${CONDA_ENV}
 
-                            export PROJECT_NAME=heart
+                            export PROJECT_NAME=${PROJECT_NAME}
+                            export DATA_DIR=${DATA_DIR}
+                            export MODEL_DIR=${MODEL_DIR}
+                            export MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+
                             python3 preprocess.py
-                            python3 trainandevaluate.py 2>&1 | tee heart_train_log.txt
+                            python3 trainandevaluate.py 2>&1 | tee heart_train_log.txt || true
                         """
                     }
                     post {
                         always {
                             archiveArtifacts artifacts: 'heart_train_log.txt', allowEmptyArchive: true, fingerprint: true
+                            sh "cp -v ${MODEL_DIR}/last_run_summary.json . || true"
+                            archiveArtifacts artifacts: 'last_run_summary.json', allowEmptyArchive: true
                         }
                     }
                 }
-
             }
         }
 
@@ -83,6 +109,8 @@ pipeline {
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
                     conda activate ${CONDA_ENV}
                     export PROJECT_NAME=${PROJECT_NAME}
+                    export DATA_DIR=${BASE_DATA_DIR}/${PROJECT_NAME}
+                    export MODEL_DIR=${BASE_MODEL_DIR}/${PROJECT_NAME}
                     python3 preprocess.py
                 """
             }
@@ -98,7 +126,10 @@ pipeline {
                         . ${CONDA_PATH}/etc/profile.d/conda.sh
                         conda activate ${CONDA_ENV}
                         export PROJECT_NAME=${PROJECT_NAME}
-                        python3 trainandevaluate.py 2>&1 | tee train_log.txt
+                        export DATA_DIR=${BASE_DATA_DIR}/${PROJECT_NAME}
+                        export MODEL_DIR=${BASE_MODEL_DIR}/${PROJECT_NAME}
+                        export MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+                        python3 trainandevaluate.py 2>&1 | tee train_log.txt || true
                     """
                     env.TRAIN_END = sh(script: "python3 -c 'import time; print(int(time.time()))'", returnStdout: true).trim()
                 }
@@ -115,8 +146,8 @@ pipeline {
 
                     python3 - <<'PY'
 import json, os, sys
-
-summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
+MODEL_DIR = os.environ.get('MODEL_DIR', 'models')
+summary_path = os.path.join(MODEL_DIR, 'last_run_summary.json')
 if not os.path.exists(summary_path):
     print('No summary file found at:', summary_path)
     with open('validation_failure.txt', 'w') as f:
@@ -152,7 +183,8 @@ PY
                 sh """
                     python3 - <<'PY'
 import json, os
-summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
+MODEL_DIR = os.environ.get('MODEL_DIR', 'models')
+summary_path = os.path.join(MODEL_DIR, 'last_run_summary.json')
 if os.path.exists(summary_path):
     summary = json.load(open(summary_path))
     best = summary.get('best', {})
@@ -189,38 +221,60 @@ PY
             }
         }
 
-        stage('Deploy Model') {
+        stage('Deploy Both Projects and Restart Services') {
             steps {
-                echo "Deploying model for: ${env.PROJECT_NAME}"
+                echo "Deploying both diabetes & heart models to their respective MODEL_DIRs and restarting services"
                 sh """
                     set -e
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
                     conda activate ${CONDA_ENV}
 
-                    export PROJECT_NAME=${PROJECT_NAME}
-                    python3 deploy.py
+                    # deploy diabetes
+                    export PROJECT_NAME=diabetes
+                    export MODEL_DIR=${BASE_MODEL_DIR}/diabetes
+                    export MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+                    python3 deploy.py --project diabetes --stage Staging || true
 
-                    if [ -f "${MODEL_DIR}/model_metadata.json" ]; then
-                        python3 - <<'PY'
-import json, os
-p = os.path.join("${MODEL_DIR}", "model_metadata.json")
-m = json.load(open(p))
-name = m.get('model_name') or m.get('best', {}).get('name')
-version = m.get('version') or (m.get('best', {}).get('registry') or {}).get('version')
-print(f"JENKINS: Deployed model: {name} v{version}")
-PY
+                    # deploy heart
+                    export PROJECT_NAME=heart
+                    export MODEL_DIR=${BASE_MODEL_DIR}/heart
+                    python3 deploy.py --project heart --stage Staging || true
+
+                    # restart services (requires permission). If you don't have sudo in Jenkins,
+                    # either run these commands manually or grant Jenkins sudo rights for these commands.
+                    if command -v sudo >/dev/null 2>&1; then
+                        sudo systemctl restart ${DIABETES_SERVICE} || true
+                        sudo systemctl restart ${HEART_SERVICE} || true
+                    else
+                        echo "sudo not found - please restart ${DIABETES_SERVICE} and ${HEART_SERVICE} manually"
                     fi
                 """
             }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'models/**/model_metadata.json', allowEmptyArchive: true, fingerprint: true
+                }
+            }
         }
 
-        stage('Run Flask App & Health Check') {
+        stage('Run Flask App Health Checks') {
             steps {
+                echo "Checking both Flask services health endpoints..."
                 sh """
+                    set -e
+                    # diabetes at 5000
                     if curl --max-time 5 --silent --fail http://localhost:5000/health; then
-                        echo "Flask OK"
+                        echo "Diabetes app healthy"
                     else
-                        echo "Flask is NOT healthy!"
+                        echo "Diabetes app not healthy"
+                        exit 1
+                    fi
+
+                    # heart at 5005
+                    if curl --max-time 5 --silent --fail http://localhost:5005/health; then
+                        echo "Heart app healthy"
+                    else
+                        echo "Heart app not healthy"
                         exit 1
                     fi
                 """
@@ -231,6 +285,7 @@ PY
 
     post {
         always {
+            echo "Cleaning up workspace..."
             cleanWs()
         }
     }
