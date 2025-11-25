@@ -18,37 +18,25 @@ pipeline {
     }
 
     stages {
-
-        stage('Check changes (diabetes.csv)') {
+        stage('Check changes (data)') {
             steps {
                 script {
-                    // Ensure we have recent refs to diff against
                     sh "git fetch --all --quiet || true"
-
-                    // Get changed files between last two commits
-                    // NOTE: this uses HEAD~1 HEAD (works for typical push events where HEAD~1 exists)
                     def changedFiles = sh(script: "git diff --name-only HEAD~1 HEAD || true", returnStdout: true).trim()
                     echo "Changed files (HEAD~1..HEAD):\\n${changedFiles}"
-
-                    if (!changedFiles?.contains('diabetes.csv')) {
-                        echo "No changes to diabetes.csv detected — skipping pipeline."
-                        // Mark build as not built and exit the pipeline early
-                        currentBuild.result = 'NOT_BUILT'
-                        return
-                    } else {
-                        echo "diabetes.csv changed — continuing pipeline."
-                    }
+                    // don't gate on diabetes.csv specifically; run pipeline always or handle by job config
                 }
             }
         }
 
         stage('Preprocess') {
             steps {
-                echo "Running preprocessing..."
+                echo "Running preprocessing for project ${env.PROJECT_NAME}..."
                 sh """
                     set -e
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
                     conda activate ${CONDA_ENV}
+                    export PROJECT_NAME=${PROJECT_NAME}
                     python3 preprocess.py
                 """
             }
@@ -69,6 +57,19 @@ pipeline {
                 }
             }
         }
+
+        // Remaining stages unchanged (Model Validation, Ensemble Creation Check, Record Retrain Time Metric, Deploy Model, Run Flask App & Health Check)
+        // Keep the rest of your existing Jenkinsfile stages (unchanged) — they work with PROJECT_NAME env.
+    }
+
+    post {
+        always {
+            echo "Cleaning up workspace..."
+            cleanWs()
+        }
+    }
+}
+
 
         stage('Model Validation') {
             steps {
