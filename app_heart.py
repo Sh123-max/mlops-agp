@@ -8,14 +8,73 @@ import numpy as np
 from flask import Flask, request, render_template
 from prometheus_client import Gauge, Counter, Histogram
 from prometheus_flask_exporter import PrometheusMetrics
+import glob
+
+PROJECT = os.getenv("PROJECT_NAME", "heart")
+MODEL_BASE_DIR = os.getenv("MODEL_DIR", "models")
+PROJECT_MODEL_DIR = os.path.join(MODEL_BASE_DIR, PROJECT)
+meta_path = os.path.join(PROJECT_MODEL_DIR, "model_metadata.json")
+
+model = None
+model_name = "unknown"
+model_metrics = {}
+expected_feature_order = None
+expected_feature_count = None
+start_time = time.time()
+
+def load_project_model():
+    """
+    Load the deployed heart model and its metadata.
+    Supports nested artifact layouts (prefers top-level files).
+    """
+    global model, model_name, model_metrics, expected_feature_order, expected_feature_count
+    try:
+        if os.path.exists(meta_path):
+            try:
+                meta = json.load(open(meta_path))
+                model_name = meta.get("model_name", model_name)
+                model_metrics = meta.get("metrics", meta.get("best", {}))
+                expected_feature_order = meta.get("feature_order")
+                expected_feature_count = meta.get("feature_count")
+                if expected_feature_count is not None:
+                    expected_feature_count = int(expected_feature_count)
+            except Exception as me:
+                print(f"[{PROJECT}] Failed reading metadata {meta_path}: {me}")
+
+        deployed_dir = os.path.join(PROJECT_MODEL_DIR, "deployed_model")
+        if os.path.exists(deployed_dir):
+            candidates = []
+            candidates += sorted(glob.glob(os.path.join(deployed_dir, "*.pkl")))
+            candidates += sorted(glob.glob(os.path.join(deployed_dir, "*.joblib")))
+            if not candidates:
+                candidates += sorted(glob.glob(os.path.join(deployed_dir, "**", "*.pkl"), recursive=True))
+                candidates += sorted(glob.glob(os.path.join(deployed_dir, "**", "*.joblib"), recursive=True))
+            if candidates:
+                model_path = candidates[0]
+                try:
+                    model = joblib.load(model_path)
+                except Exception as le:
+                    print(f"[{PROJECT}] Failed loading model file {model_path}: {le}")
+                    model = None
+                    return
+                if expected_feature_count is None:
+                    expected_feature_count = getattr(model, "n_features_in_", None)
+                print(f"[{PROJECT}] Loaded model from {model_path}. expected_features={expected_feature_count}")
+                return
+            else:
+                print(f"[{PROJECT}] No model files in {deployed_dir}")
+        else:
+            print(f"[{PROJECT}] deployed_model directory not found: {deployed_dir}")
+    except Exception as e:
+        print(f"[{PROJECT}] Failed loading model: {e}")
+
+load_project_model()
 
 app = Flask(__name__, template_folder="templates")
 metrics = PrometheusMetrics(app, path="/metrics")
 HOSTNAME = socket.gethostname()
 
-PROJECT_NAME = os.getenv("PROJECT_NAME", "heart")
-
-# Metrics (use project label where possible)
+# Metrics with labels
 MODEL_INFO = Gauge("heart_model_version_info", "Info about loaded heart model", ["project", "model_name", "model_version", "host"])
 PREDICTION_COUNT = Counter("heart_prediction_requests_total", "Total heart prediction requests", ["project", "outcome"])
 INPUT_VALIDATION_ERRORS = Counter("heart_input_validation_errors_total", "Input validation errors counted", ["project", "field"])
@@ -23,17 +82,8 @@ PREDICTION_LATENCY = Histogram("heart_inference_latency_ms", "Heart model infere
 MODEL_ACCURACY = Gauge("heart_current_model_accuracy", "Accuracy of deployed heart ML model", ["project"])
 MODEL_UPTIME = Gauge("heart_model_service_uptime_seconds", "Uptime of heart model service in seconds", ["project"])
 
-MODEL_DIR = os.getenv("MODEL_DIR", "models")
-meta_path = os.path.join(MODEL_DIR, "model_metadata.json")
-model = None
-model_name = "unknown"
-model_metrics = {}
-start_time = time.time()
-
-# Feature order and validation (best-effort)
-FEATURE_ORDER = [
-    "age","sex","cp","trestbps","chol","fbs","restecg","thalach","exang","oldpeak","slope","ca","thal"
-]
+# Default heart feature order (adjust if your dataset differs)
+FEATURE_ORDER = ["age","sex","cp","trestbps","chol","fbs","restecg","thalach","exang","oldpeak","slope","ca","thal"]
 VALID_RANGES = {
     "age": (18,100),
     "sex": (0,1),
@@ -50,31 +100,15 @@ VALID_RANGES = {
     "thal": (0,3)
 }
 
-def load_model():
-    global model, model_name, model_metrics
-    try:
-        if os.path.exists(meta_path):
-            meta = json.load(open(meta_path))
-            model_name = meta.get("model_name", model_name)
-            model_metrics = meta.get("metrics", meta.get("best", {}))
-            try:
-                MODEL_ACCURACY.labels(PROJECT_NAME).set(float(model_metrics.get("accuracy", 0.0)))
-            except Exception:
-                pass
-        deployed_dir = os.path.join(MODEL_DIR, "deployed_model")
-        if os.path.exists(deployed_dir):
-            candidates = [os.path.join(deployed_dir, f) for f in os.listdir(deployed_dir) if f.endswith(".pkl") or f.endswith(".joblib")]
-            if candidates:
-                model = joblib.load(candidates[0])
-                print("[app_heart] Loaded model from:", candidates[0])
-                try:
-                    MODEL_INFO.labels(PROJECT_NAME, model_name, str(meta.get("version", "")), HOSTNAME).set(1)
-                except Exception:
-                    pass
-    except Exception as e:
-        print("[app_heart] Failed to load model:", e)
-
-load_model()
+# set metrics if possible
+try:
+    MODEL_ACCURACY.labels(PROJECT).set(float(model_metrics.get("accuracy", 0.0)))
+except Exception:
+    pass
+try:
+    MODEL_INFO.labels(PROJECT, model_name, str(model_metrics.get("version", "")), HOSTNAME).set(1)
+except Exception:
+    pass
 
 @app.route('/')
 def home():
@@ -84,18 +118,15 @@ def home():
 def predict():
     start = time.time()
     if model is None:
-        return render_template('form_heart.html', prediction="Error", probability="Model not loaded", error_messages=["Model missing."], model_name=model_name, model_metrics=model_metrics)
-
-    input_vals = []
+        return render_template('form_heart.html', prediction="Error", probability="Model not loaded", error_messages=[f"Model missing for project '{PROJECT}'. Deploy first."], model_name=model_name, model_metrics=model_metrics)
+    order = expected_feature_order if expected_feature_order else FEATURE_ORDER
+    inputs = []
     errors = []
-    for key in FEATURE_ORDER:
+    for key in order:
         raw = request.form.get(key, "")
         if raw == "":
             errors.append(f"{key} is required")
-            try:
-                INPUT_VALIDATION_ERRORS.labels(PROJECT_NAME, key).inc()
-            except Exception:
-                INPUT_VALIDATION_ERRORS.labels("unknown", key).inc()
+            INPUT_VALIDATION_ERRORS.labels(PROJECT, key).inc()
             continue
         try:
             val = float(raw)
@@ -103,24 +134,17 @@ def predict():
                 lo, hi = VALID_RANGES[key]
                 if not (lo <= val <= hi):
                     errors.append(f"{key} must be between {lo} and {hi}")
-                    try:
-                        INPUT_VALIDATION_ERRORS.labels(PROJECT_NAME, key).inc()
-                    except Exception:
-                        INPUT_VALIDATION_ERRORS.labels("unknown", key).inc()
-            input_vals.append(val)
+                    INPUT_VALIDATION_ERRORS.labels(PROJECT, key).inc()
+            inputs.append(val)
         except Exception:
             errors.append(f"{key} must be numeric")
-            try:
-                INPUT_VALIDATION_ERRORS.labels(PROJECT_NAME, key).inc()
-            except Exception:
-                INPUT_VALIDATION_ERRORS.labels("unknown", key).inc()
-
+            INPUT_VALIDATION_ERRORS.labels(PROJECT, key).inc()
     if errors:
         return render_template('form_heart.html', prediction=None, probability=None, error_messages=errors, model_name=model_name, model_metrics=model_metrics)
-
+    if expected_feature_count is not None and len(inputs) != expected_feature_count:
+        return render_template('form_heart.html', prediction=None, probability=None, error_messages=[f"Input has {len(inputs)} features, model expects {expected_feature_count}. Check model metadata."], model_name=model_name, model_metrics=model_metrics)
     try:
-        sample = np.array([input_vals])
-        t0 = time.time()
+        sample = np.array([inputs])
         pred = model.predict(sample)[0]
         try:
             proba = model.predict_proba(sample)[0][1] if hasattr(model, "predict_proba") else 0.5
@@ -128,10 +152,7 @@ def predict():
             proba = 0.5
         latency_ms = (time.time() - start) * 1000.0
         outcome = "disease" if pred == 1 else "no_disease"
-        try:
-            PREDICTION_COUNT.labels(PROJECT_NAME, outcome).inc()
-        except Exception:
-            PREDICTION_COUNT.labels("unknown", outcome).inc()
+        PREDICTION_COUNT.labels(PROJECT, outcome).inc()
         try:
             PREDICTION_LATENCY.observe(latency_ms)
         except Exception:
@@ -145,7 +166,7 @@ def predict():
 def health():
     uptime = time.time() - start_time
     try:
-        MODEL_UPTIME.labels(PROJECT_NAME).set(uptime)
+        MODEL_UPTIME.labels(PROJECT).set(uptime)
     except Exception:
         pass
     return {"status": "healthy", "uptime_seconds": uptime}
@@ -153,12 +174,12 @@ def health():
 @app.route('/reload', methods=['POST'])
 def reload_model():
     try:
-        load_model()
+        load_project_model()
         return {"reloaded": True, "model": model_name}
     except Exception as e:
         return {"reloaded": False, "error": str(e)}, 500
 
 if __name__ == '__main__':
     port = int(os.getenv("HEART_APP_PORT", "5005"))
-    print(f"[app_heart] Starting Flask server on port {port} (MODEL_DIR={MODEL_DIR})...")
+    print(f"[app_heart] Starting Flask server on port {port} (PROJECT={PROJECT} MODEL_DIR={MODEL_BASE_DIR})...")
     app.run(host='0.0.0.0', port=port)
