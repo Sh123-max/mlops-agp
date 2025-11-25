@@ -1,4 +1,3 @@
-
 import os
 import json
 import time
@@ -22,6 +21,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
 from xgboost import XGBClassifier
 
+# Attempt to import helper modules; fallback stubs if missing
 try:
     from metrics_history import MetricsHistory
     from ensemble_manager import EnsembleManager
@@ -36,6 +36,14 @@ except ImportError:
         def __init__(self, *args, **kwargs): pass
         def train_and_evaluate_ensemble(self, *args, **kwargs): return None, None
         def log_ensemble_to_mlflow(self, *args, **kwargs): return None
+
+# Optional: export_retrain_time helper for pushing retrain-time metric centrally
+try:
+    from monitoring.metrics_exporter import export_retrain_time
+except Exception:
+    def export_retrain_time(*args, **kwargs):
+        # no-op fallback if monitoring module is not present
+        return
 
 PROJECT_NAME = os.getenv("PROJECT_NAME", "diabetes")
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
@@ -439,6 +447,28 @@ try:
     print("[OK] model metadata written to", meta_path)
 except Exception as e:
     print("Failed to write model metadata:", e)
+
+# ---- Push retrain-time via export_retrain_time helper (ADDED) ----
+try:
+    # choose retrain_time from the chosen model result (fallback to first valid result)
+    chosen_res = None
+    for r in results:
+        if r.get("name") == best.get("name"):
+            chosen_res = r
+            break
+    if chosen_res is None and valid_results:
+        chosen_res = valid_results[0]
+    if chosen_res:
+        retrain_t = float(chosen_res.get("retrain_time_seconds", -1))
+        # call helper (no-op fallback if monitoring module missing)
+        try:
+            export_retrain_time(retrain_t, job=f"{PROJECT_NAME}_retrain")
+            print(f"[MONITOR] export_retrain_time called with {retrain_t}s for job={PROJECT_NAME}_retrain")
+        except Exception as e:
+            print("[MONITOR] export_retrain_time failed:", e)
+except Exception as e:
+    print("[MONITOR] Could not determine retrain time to export:", e)
+# -----------------------------------------------------------------
 
 if PUSHGATEWAY_URL and best.get("name") and should_deploy:
     try:
