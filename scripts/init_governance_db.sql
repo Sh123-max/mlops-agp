@@ -1,3 +1,4 @@
+-- scripts/init_governance_db.sql
 CREATE TABLE IF NOT EXISTS drift_alerts (
     id SERIAL PRIMARY KEY,
     drift_type VARCHAR(64),
