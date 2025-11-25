@@ -1,241 +1,244 @@
+# deploy.py
+"""
+Robust per-project deploy script.
+
+Behavior:
+- Look for the latest MLflow run tagged `project=<project>` and use artifacts from that run.
+- If not found, try model registry (models:/...) if available.
+- Fallback to local artifact `models/<project>_<modelname>_model.pkl` style files.
+- Writes per-project metadata to models/<project>/model_metadata.json
+- Downloads artifacts to models/<project>/deployed_model/
+- Returns non-zero on failure (exit code 1)
+"""
 import os
 import json
 import shutil
-import joblib
 import mlflow
 from mlflow.tracking import MlflowClient
 from datetime import datetime
 
-MODEL_DIR = os.getenv("MODEL_DIR", "models")
+# Config from env
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
 
-try:
-    from metrics_history import MetricsHistory
-except ImportError:
-    class MetricsHistory:
-        def __init__(self, *args, **kwargs): pass
-        def add_deployment(self, *args, **kwargs): pass
+def _ensure_dir(path):
+    os.makedirs(path, exist_ok=True)
+    return path
 
-def resolve_artifact_uri_from_model_version(registry_name, version):
+def write_metadata(project_dir, metadata):
+    _ensure_dir(project_dir)
+    meta_path = os.path.join(project_dir, "model_metadata.json")
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+    return meta_path
+
+def find_run_for_project(project):
+    """
+    Find the latest run tagged project=<project>.
+    Uses mlflow.search_runs (DataFrame) because it is the most stable API across versions.
+    Returns run_id (str) or None.
+    """
     try:
-        uri = client.get_model_version_download_uri(registry_name, version)
-        if uri:
-            return uri
+        # search_runs returns a pandas DataFrame with columns including 'run_id' and 'tags...'
+        # filter on tag "project"
+        filter_str = f"tags.project = '{project}'"
+        # order by start_time desc
+        df = mlflow.search_runs(filter_string=filter_str, order_by=["attributes.start_time DESC"], max_results=5)
+        if df is not None and len(df) > 0:
+            run_id = df.iloc[0].run_id
+            return run_id
     except Exception as e:
-        print("[DEBUG] get_model_version_download_uri not usable:", e)
+        print("[WARN] mlflow.search_runs by tag failed:", e)
+    # fallback: search by tag using client.search_runs (if available)
     try:
-        mv = client.get_model_version(registry_name, version)
-        print("[DEBUG] model version object:", {"name": mv.name, "version": mv.version, "source": getattr(mv, 'source', None), "run_id": getattr(mv, 'run_id', None)})
-        src = getattr(mv, "source", None)
-        if src and src.startswith("runs:/"):
-            return src
-        run_id = getattr(mv, "run_id", None)
-        if run_id:
-            if src and "artifacts/" in src:
-                path = src.split("artifacts/", 1)[1]
-                return (run_id, path)
-            return (run_id, None)
-    except Exception as e:
-        print("[DEBUG] get_model_version fallback failed:", e)
+        # try client.search_runs across all experiments (some mlflow versions require experiment ids)
+        # try default experiment ids None (implementation dependent)
+        runs = client.search_runs(experiment_ids=None, filter_string=f"tags.project = '{project}'", run_view_type=1, max_results=1)
+        if runs:
+            return runs[0].info.run_id
+    except Exception:
+        pass
     return None
 
-def is_ensemble_model(model_name):
-    return str(model_name).startswith("Ensemble_")
+def download_artifacts_from_run(run_id, dst, artifact_path="model"):
+    """Try to download artifacts using mlflow.artifacts.download_artifacts or client.download_artifacts"""
+    _ensure_dir(dst)
+    # Try mlflow.artifacts.download_artifacts
+    try:
+        uri = f"runs:/{run_id}/{artifact_path}"
+        print(f"[INFO] Using mlflow.artifacts.download_artifacts for {uri} -> {dst}")
+        local_path = mlflow.artifacts.download_artifacts(artifact_uri=uri, dst_path=dst)
+        return local_path
+    except Exception as e:
+        print("[WARN] mlflow.artifacts.download_artifacts failed:", e)
+    # Try client.download_artifacts
+    try:
+        print(f"[INFO] Trying MlflowClient.download_artifacts run_id={run_id} path={artifact_path} dst={dst}")
+        client.download_artifacts(run_id, artifact_path, dst)
+        return dst
+    except Exception as e:
+        print("[WARN] MlflowClient.download_artifacts failed:", e)
+    return None
+
+def resolve_model_registry_and_download(registry_name, dst):
+    """
+    If a model registry entry exists (models:/...), try to resolve and download artifacts.
+    """
+    try:
+        # mlflow.artifacts.download_artifacts accepts models:/ URIs as well
+        model_uri = f"models:/{registry_name}/staging"  # try stage name variant - may fail harmlessly
+    except Exception:
+        model_uri = None
+
+    # Try primary mlflow API: mlflow.artifacts.download_artifacts with models:/
+    if registry_name:
+        # First try latest versions via client.get_latest_versions
+        try:
+            vers = []
+            try:
+                vers = client.get_latest_versions(registry_name) or []
+            except Exception:
+                # some mlflow server setups or versions might not permit this
+                vers = []
+            if vers:
+                # pick first
+                mv = vers[0]
+                source = getattr(mv, "source", None)
+                run_id = getattr(mv, "run_id", None)
+                print("[INFO] mlflow registry version source:", source, "run_id:", run_id)
+                if run_id:
+                    p = download_artifacts_from_run(run_id, dst, artifact_path="model")
+                    if p:
+                        return p, mv.version
+                # fallback to mlflow.artifacts.download_artifacts on models:/ URI
+                try:
+                    uri = f"models:/{registry_name}/{mv.version}"
+                    print(f"[INFO] Trying mlflow.artifacts.download_artifacts for {uri}")
+                    p = mlflow.artifacts.download_artifacts(artifact_uri=uri, dst_path=dst)
+                    return p, mv.version
+                except Exception as e:
+                    print("[WARN] mlflow.artifacts.download_artifacts for models:/ failed:", e)
+        except Exception as e:
+            print("[WARN] registry resolution failed:", e)
+    return None, None
 
 def deploy_best(project, stage="Staging"):
-    summary_path = os.path.join(MODEL_DIR, "last_run_summary.json")
-    if not os.path.exists(summary_path):
-        raise RuntimeError("No last_run_summary.json found. Run training first.")
-    summary = json.load(open(summary_path))
-    best = summary.get("best", {})
-    best_name = best.get("name")
-    if not best_name:
-        raise RuntimeError("No best model found in summary.")
-    should_deploy = best.get("should_deploy", True)
-    deploy_reason = best.get("deploy_reason", "No deployment reason provided")
-    if not should_deploy:
-        print(f"Deployment blocked: {deploy_reason}")
-        trigger_manual_intervention_alert(best, deploy_reason)
-        return False
-    registry_name = f"{project}_{best_name}"
-    versions = []
-    try:
-        versions = client.get_latest_versions(registry_name, stages=[stage]) or []
-        if not versions:
-            versions = client.get_latest_versions(registry_name) or []
-    except Exception as e:
-        print("[WARN] Registry listing error:", e)
-        versions = []
-    dst = os.path.join(MODEL_DIR, "deployed_model")
-    os.makedirs(dst, exist_ok=True)
-    metadata = {"model_name": best_name, "registry_name": registry_name, "version": None, "source": None, "deployed_path": None}
-    if is_ensemble_model(best_name):
-        print(f"Loading ensemble model: {best_name}")
-        ensemble_path = os.path.join(MODEL_DIR, f"{best_name}_model.pkl")
-        if os.path.exists(ensemble_path):
-            try:
-                deployed_ensemble_path = os.path.join(dst, f"{best_name}_model.pkl")
-                shutil.copy2(ensemble_path, deployed_ensemble_path)
-                metadata["deployed_path"] = deployed_ensemble_path
-                metadata["model_type"] = "ensemble"
-                metadata["version"] = "ensemble-latest"
-                print(f"[DEPLOYED] Ensemble model deployed: {best_name} -> {deployed_ensemble_path}")
-                metrics_history = MetricsHistory()
-                metrics_history.add_deployment({
-                    "model_name": best_name,
-                    "registry_name": registry_name,
-                    "metrics": best,
-                    "stage": stage,
-                    "deployment_reason": deploy_reason,
-                    "is_ensemble": True
-                })
-                with open(os.path.join(MODEL_DIR, "model_metadata.json"), "w") as f:
-                    json.dump(metadata, f, indent=2)
-                return True
-            except Exception as e:
-                print(f"Failed to load ensemble model: {e}")
-        else:
-            print(f"Ensemble model file not found: {ensemble_path}")
-    if versions:
-        selected = versions[0]
-        metadata["version"] = selected.version
-        print(f"[INFO] Selected model version: name={selected.name} version={selected.version} stage={getattr(selected,'current_stage',None)}")
-        artifact_uri = getattr(selected, "source", None)
-        metadata["source"] = artifact_uri
-        print("[DEBUG] selected.source:", artifact_uri)
-        run_id = getattr(selected, "run_id", None)
-        if run_id:
-            try:
-                print(f"[INFO] Trying client.download_artifacts run_id={run_id} path='model' dst={dst}")
-                client.download_artifacts(run_id, "model", dst)
-                metadata["deployed_path"] = dst
-                metadata["version"] = metadata.get("version") or "from-run"
-                with open(os.path.join(MODEL_DIR, "model_metadata.json"), "w") as f:
-                    json.dump(metadata, f, indent=2)
-                print("[OK] Downloaded artifacts via client.download_artifacts")
-                print(f"[DEPLOYED] model_name={best_name} registry_name={registry_name} version={metadata.get('version')} deployed_path={metadata.get('deployed_path')}")
-                metrics_history = MetricsHistory()
-                metrics_history.add_deployment({
-                    "model_name": best_name,
-                    "registry_name": registry_name,
-                    "metrics": best,
-                    "stage": stage,
-                    "deployment_reason": deploy_reason
-                })
-                return True
-            except Exception as e:
-                print("[WARN] client.download_artifacts failed:", e)
-        resolved = None
-        if artifact_uri and str(artifact_uri).startswith("models:/"):
-            resolved = resolve_artifact_uri_from_model_version(registry_name, selected.version)
-            print("[DEBUG] resolved:", resolved)
-        elif artifact_uri:
-            resolved = artifact_uri
-        if resolved:
-            try:
-                if isinstance(resolved, tuple):
-                    run_id2, path = resolved
-                    print(f"[INFO] Using client.download_artifacts run_id={run_id2} path={path or '<top>'} dst={dst}")
-                    client.download_artifacts(run_id2, path or '', dst)
-                    metadata["deployed_path"] = dst
-                    with open(os.path.join(MODEL_DIR, "model_metadata.json"), "w") as f:
-                        json.dump(metadata, f, indent=2)
-                    print("[OK] Downloaded artifacts via client.download_artifacts (tuple path)")
-                    print(f"[DEPLOYED] model_name={best_name} registry_name={registry_name} version={metadata.get('version')} deployed_path={metadata.get('deployed_path')}")
-                    metrics_history = MetricsHistory()
-                    metrics_history.add_deployment({
-                        "model_name": best_name,
-                        "registry_name": registry_name,
-                        "metrics": best,
-                        "stage": stage,
-                        "deployment_reason": deploy_reason
-                    })
-                    return True
-                else:
-                    print(f"[INFO] Downloading artifact_uri={resolved} to dst={dst}")
-                    local_path = mlflow.artifacts.download_artifacts(artifact_uri=resolved, dst_path=dst)
-                    metadata["deployed_path"] = local_path
-                    with open(os.path.join(MODEL_DIR, "model_metadata.json"), "w") as f:
-                        json.dump(metadata, f, indent=2)
-                    print("[OK] Downloaded artifacts to", local_path)
-                    print("[OK] Deployment metadata written to models/model_metadata.json")
-                    print(f"[DEPLOYED] model_name={best_name} registry_name={registry_name} version={metadata.get('version')} deployed_path={local_path}")
-                    metrics_history = MetricsHistory()
-                    metrics_history.add_deployment({
-                        "model_name": best_name,
-                        "registry_name": registry_name,
-                        "metrics": best,
-                        "stage": stage,
-                        "deployment_reason": deploy_reason
-                    })
-                    return True
-            except Exception as e:
-                print("[WARN] Failed to download artifacts from resolved source:", e)
-        else:
-            print("[WARN] Could not resolve artifact_uri for model version; falling back to local model if available.")
-    local_best = os.path.join(MODEL_DIR, f"{best_name}_model.pkl")
-    if os.path.exists(local_best):
-        deployed = os.path.join(dst, f"{best_name}_model.pkl")
-        shutil.copy2(local_best, deployed)
-        metadata["deployed_path"] = deployed
-        metadata["version"] = metadata.get("version") or "local-fallback"
-        try:
-            meta_json = json.load(open(os.path.join(MODEL_DIR, "model_metadata.json"))) if os.path.exists(os.path.join(MODEL_DIR, "model_metadata.json")) else {}
-            meta_json.update(metadata)
-            with open(os.path.join(MODEL_DIR, "model_metadata.json"), "w") as f:
-                json.dump(meta_json, f, indent=2)
-        except Exception:
-            with open(os.path.join(MODEL_DIR, "model_metadata.json"), "w") as f:
-                json.dump(metadata, f, indent=2)
-        print("[OK] Fallback: copied local model to", deployed)
-        print("[OK] Deployment metadata written to models/model_metadata.json")
-        print(f"[DEPLOYED] model_name={best_name} registry_name={registry_name} version={metadata.get('version')} deployed_path={deployed}")
-        metrics_history = MetricsHistory()
-        metrics_history.add_deployment({
-            "model_name": best_name,
-            "registry_name": registry_name,
-            "metrics": best,
-            "stage": stage,
-            "deployment_reason": deploy_reason
-        })
-        return True
-    raise RuntimeError(f"No model could be downloaded or found locally for registry_name={registry_name}")
+    project_dir = os.path.join("models", project)
+    _ensure_dir(project_dir)
+    deployed_dir = os.path.join(project_dir, "deployed_model")
+    _ensure_dir(deployed_dir)
 
-def trigger_manual_intervention_alert(current_best, reason):
-    alert_data = {
-        "timestamp": datetime.now().isoformat(),
-        "current_model": current_best,
-        "block_reason": reason,
-        "requires_manual_review": True
+    # Wish: prefer last_run_summary.json local file per-project, otherwise use global models/last_run_summary.json
+    local_summary = os.path.join(project_dir, "last_run_summary.json")
+    global_summary = os.path.join("models", "last_run_summary.json")
+    summary_path = local_summary if os.path.exists(local_summary) else global_summary
+    if not os.path.exists(summary_path):
+        print("[WARN] No last_run_summary.json for project; will try to find runs in MLflow")
+        summary = {}
+    else:
+        summary = json.load(open(summary_path))
+
+    # find best model name (fallback to "best" object from summary)
+    best = summary.get("best", {})
+    best_name = best.get("name", None)
+    deploy_reason = best.get("deploy_reason", "No reason provided")
+    should_deploy = best.get("should_deploy", True)
+
+    # If summary exists and deployment is blocked, abort and write an alerts file
+    if summary and not should_deploy:
+        print(f"[BLOCKED] Deployment blocked for project {project}: {deploy_reason}")
+        alert_file = os.path.join(project_dir, "deployment_blocked_alerts.json")
+        alerts = []
+        if os.path.exists(alert_file):
+            try:
+                alerts = json.load(open(alert_file, "r"))
+            except Exception:
+                alerts = []
+        alerts.append({
+            "timestamp": datetime.now().isoformat(),
+            "project": project,
+            "best": best,
+            "reason": deploy_reason
+        })
+        with open(alert_file, "w") as f:
+            json.dump(alerts, f, indent=2)
+        return False
+
+    # Try to discover run by tag
+    run_id = find_run_for_project(project)
+    metadata = {
+        "model_name": best_name or "unknown",
+        "project": project,
+        "registry_name": None,
+        "version": None,
+        "source": None,
+        "deployed_path": None,
+        "feature_count": best.get("feature_count") if isinstance(best, dict) else None,
+        "feature_order": best.get("feature_order") if isinstance(best, dict) else None,
+        "metrics": best,
+        "deployed_at": datetime.now().isoformat()
     }
-    alert_file = os.path.join(MODEL_DIR, "deployment_blocked_alerts.json")
-    alerts = []
-    if os.path.exists(alert_file):
-        with open(alert_file, 'r') as f:
-            alerts = json.load(f)
-    alerts.append(alert_data)
-    with open(alert_file, 'w') as f:
-        json.dump(alerts, f, indent=2)
-    print(f"MANUAL INTERVENTION REQUIRED: {reason}")
+
+    # If run found, try to download artifacts from run
+    if run_id:
+        print(f"[INFO] Found run for project {project}: run_id={run_id}. Attempting to download artifacts...")
+        p = download_artifacts_from_run(run_id, deployed_dir, artifact_path="model")
+        if p:
+            metadata.update({"deployed_path": p, "source": f"runs:/{run_id}/model"})
+            write_metadata(project_dir, metadata)
+            print("[OK] Downloaded artifacts from run and wrote metadata")
+            return True
+        else:
+            print("[WARN] Failed to download artifacts from run; continuing to registry fallback")
+
+    # If summary best_name exists, try registry name pattern <project>_<modelname>
+    if best_name:
+        registry_name = f"{project}_{best_name}"
+        print(f"[INFO] Trying registry name: {registry_name}")
+        p, ver = resolve_model_registry_and_download(registry_name, deployed_dir)
+        if p:
+            metadata.update({"deployed_path": p, "registry_name": registry_name, "version": ver, "source": p})
+            write_metadata(project_dir, metadata)
+            print("[OK] Deployed from registry or models:/ URI")
+            return True
+        else:
+            print("[WARN] Could not obtain registry artifact for", registry_name)
+
+    # Last fallback: try local artifact with common names
+    local_candidates = [
+        os.path.join("models", f"{best_name}_model.pkl") if best_name else None,
+        os.path.join("models", f"{best_name}_model.joblib") if best_name else None,
+        os.path.join("models", "best_model.pkl"),
+        os.path.join("models", "best_model.joblib"),
+        os.path.join("models", f"{project}_model.pkl"),
+        os.path.join("models", f"{project}_model.joblib")
+    ]
+    for c in local_candidates:
+        if not c:
+            continue
+        if os.path.exists(c):
+            print(f"[INFO] Fallback: copying local model {c} -> {deployed_dir}")
+            dest = os.path.join(deployed_dir, os.path.basename(c))
+            shutil.copy2(c, dest)
+            metadata.update({"deployed_path": dest, "version": "local-fallback", "source": c})
+            write_metadata(project_dir, metadata)
+            print("[OK] Copied local fallback model and wrote metadata")
+            return True
+
+    print("[ERROR] No model could be downloaded or located for project:", project)
+    return False
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--project", default=os.getenv("PROJECT_NAME", "diabetes"))
-    parser.add_argument("--stage", default="Staging")
-    args = parser.parse_args()
-    success = deploy_best(args.project, args.stage)
-    if success:
+    p = argparse.ArgumentParser()
+    p.add_argument("--project", default=os.getenv("PROJECT_NAME", "diabetes"), help="Project name (diabetes/heart)")
+    p.add_argument("--stage", default="Staging", help="Model registry stage (unused if not registered)")
+    args = p.parse_args()
+
+    ok = deploy_best(args.project, stage=args.stage)
+    if ok:
         print("Deployment completed successfully")
-        try:
-            mm = json.load(open(os.path.join(MODEL_DIR, "model_metadata.json")))
-            name = mm.get("model_name") or mm.get("best", {}).get("name")
-            version = mm.get("version") or (mm.get("best", {}).get("registry") or {}).get("version")
-            print(f"[DEPLOYED-METADATA] model_name={name} version={version}")
-        except Exception:
-            pass
     else:
-        print("Deployment was blocked or failed")
+        print("Deployment FAILED")
         exit(1)
