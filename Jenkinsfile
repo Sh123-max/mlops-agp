@@ -3,11 +3,11 @@ pipeline {
 
     environment {
         PROJECT_NAME = "${env.PROJECT_NAME ?: 'diabetes'}"
-        DATA_DIR = "${env.DATA_DIR ?: 'data'}"
-        MODEL_DIR = "${env.MODEL_DIR ?: 'models'}"
+        DATA_DIR    = "${env.DATA_DIR ?: 'data'}"
+        MODEL_DIR   = "${env.MODEL_DIR ?: 'models'}"
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
-        CONDA_PATH = "/home/shreekar/miniconda3"
-        CONDA_ENV = "mlops-agp"
+        CONDA_PATH  = "/home/shreekar/miniconda3"
+        CONDA_ENV   = "mlops-agp"
         FLASK_SERVICE = "mlops-flask.service"
     }
 
@@ -24,7 +24,7 @@ pipeline {
                     sh "git fetch --all --quiet || true"
                     def changedFiles = sh(script: "git diff --name-only HEAD~1 HEAD || true", returnStdout: true).trim()
                     echo "Changed files (HEAD~1..HEAD):\\n${changedFiles}"
-                    // don't gate on diabetes.csv specifically; run pipeline always or handle by job config
+                    // You can gate the pipeline using changedFiles if desired.
                 }
             }
         }
@@ -61,7 +61,7 @@ pipeline {
         stage('Model Validation') {
             steps {
                 echo "Validating model performance against previous best..."
-                sh '''
+                sh """
                     set -e
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
                     conda activate ${CONDA_ENV}
@@ -71,7 +71,10 @@ import json, os, sys
 
 summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
 if not os.path.exists(summary_path):
-    print('No summary file found')
+    print('No summary file found at:', summary_path)
+    # create a file for downstream debugging/artifacts
+    with open('validation_failure.txt', 'w') as f:
+        f.write('No last_run_summary.json found. Check train_log.txt for errors.')
     sys.exit(1)
 
 summary = json.load(open(summary_path))
@@ -80,20 +83,19 @@ should_deploy = best.get('should_deploy', True)
 deploy_reason = best.get('deploy_reason', 'No reason provided')
 
 if not should_deploy:
-    print(f'Model validation failed: {deploy_reason}')
-    # Write to file for artifact collection
+    print(f'Model validation blocked: {deploy_reason}')
     with open('validation_failure.txt', 'w') as f:
         f.write(deploy_reason)
     sys.exit(1)
 
 print(f'Model validation passed: {deploy_reason}')
 PY
-                '''
+                """
             }
             post {
                 failure {
-                    echo "Model validation failed - performance degradation detected"
-                    archiveArtifacts artifacts: 'validation_failure.txt', allowEmptyArchive: true, fingerprint: true
+                    echo "Model validation failed - archiving train_log.txt and validation_failure.txt for debugging"
+                    archiveArtifacts artifacts: 'validation_failure.txt,train_log.txt', allowEmptyArchive: true, fingerprint: true
                     sh '''
                         echo "Manual intervention required due to model performance degradation"
                     '''
@@ -104,23 +106,23 @@ PY
         stage('Ensemble Creation Check') {
             steps {
                 echo "Checking if ensemble was created..."
-                sh '''
+                sh """
                     python3 - <<'PY'
 import json, os
-
 summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
 if os.path.exists(summary_path):
     summary = json.load(open(summary_path))
     best = summary.get('best', {})
     if best.get('is_ensemble', False):
         print('ENSEMBLE MODEL CREATED: ' + best.get('name', ''))
-        print('Ensemble was created to handle performance drop')
         with open('ensemble_created.txt', 'w') as f:
             f.write('Ensemble created: ' + best.get('name', ''))
     else:
         print('No ensemble created - performance maintained')
+else:
+    print('No last_run_summary.json found - skipping ensemble check')
 PY
-                '''
+                """
             }
             post {
                 always {
@@ -132,7 +134,7 @@ PY
         stage('Record Retrain Time Metric') {
             steps {
                 echo "Recording retrain time metric..."
-                sh '''
+                sh """
                     python3 - <<'PY'
 import os
 start = int(os.environ.get('TRAIN_START', '0'))
@@ -142,7 +144,7 @@ with open('retrain_time.txt','w') as f:
     f.write(str(t))
 print("retrain_time_seconds:", t)
 PY
-                '''
+                """
                 archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', allowEmptyArchive: true, fingerprint: true
             }
         }
@@ -150,13 +152,12 @@ PY
         stage('Deploy Model') {
             steps {
                 echo "Deploying model..."
-                sh '''
+                sh """
                     set -e
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
                     conda activate ${CONDA_ENV}
                     python3 deploy.py
 
-                    # After deploy.py runs, print the deployed model info (if file exists)
                     if [ -f "${MODEL_DIR}/model_metadata.json" ]; then
                         python3 - <<'PY'
 import json, os, sys
@@ -173,7 +174,7 @@ PY
                     else
                         echo "JENKINS: model_metadata.json not present after deployment"
                     fi
-                '''
+                """
             }
         }
 
@@ -181,7 +182,7 @@ PY
             steps {
                 echo "Checking Flask service health..."
                 sh """
-                    # Optional: just check service health via curl (assumes systemd-managed Flask or an already-running Flask)
+                    # optional: ensure your flask is running and listening on port 5000
                     if curl --max-time 5 --silent --fail http://localhost:5000/health; then
                         echo 'Flask service is healthy!'
                     else
