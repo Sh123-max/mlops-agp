@@ -18,20 +18,66 @@ pipeline {
     }
 
     stages {
+
         stage('Check changes (data)') {
             steps {
                 script {
                     sh "git fetch --all --quiet || true"
                     def changedFiles = sh(script: "git diff --name-only HEAD~1 HEAD || true", returnStdout: true).trim()
-                    echo "Changed files (HEAD~1..HEAD):\\n${changedFiles}"
-                    // You can gate the pipeline using changedFiles if desired.
+                    echo "Changed files (HEAD~1..HEAD):\n${changedFiles}"
                 }
             }
         }
 
-        stage('Preprocess') {
+        stage('Run Both Projects (diabetes & heart)') {
+            parallel {
+
+                stage('diabetes') {
+                    steps {
+                        echo "Running preprocessing + training for DIABETES..."
+                        sh """
+                            set -e
+                            . ${CONDA_PATH}/etc/profile.d/conda.sh
+                            conda activate ${CONDA_ENV}
+
+                            export PROJECT_NAME=diabetes
+                            python3 preprocess.py
+                            python3 trainandevaluate.py 2>&1 | tee diabetes_train_log.txt
+                        """
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: 'diabetes_train_log.txt', allowEmptyArchive: true, fingerprint: true
+                        }
+                    }
+                }
+
+                stage('heart') {
+                    steps {
+                        echo "Running preprocessing + training for HEART..."
+                        sh """
+                            set -e
+                            . ${CONDA_PATH}/etc/profile.d/conda.sh
+                            conda activate ${CONDA_ENV}
+
+                            export PROJECT_NAME=heart
+                            python3 preprocess.py
+                            python3 trainandevaluate.py 2>&1 | tee heart_train_log.txt
+                        """
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: 'heart_train_log.txt', allowEmptyArchive: true, fingerprint: true
+                        }
+                    }
+                }
+
+            }
+        }
+
+        stage('Preprocess (Selected Project)') {
             steps {
-                echo "Running preprocessing for project ${env.PROJECT_NAME}..."
+                echo "Preprocessing SELECTED PROJECT for deployment: ${env.PROJECT_NAME}"
                 sh """
                     set -e
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
@@ -42,15 +88,16 @@ pipeline {
             }
         }
 
-        stage('Train & Evaluate') {
+        stage('Train & Evaluate (Selected Project)') {
             steps {
-                echo "Running training and evaluation..."
+                echo "Running training for SELECTED DEPLOYMENT PROJECT: ${env.PROJECT_NAME}"
                 script {
                     env.TRAIN_START = sh(script: "python3 -c 'import time; print(int(time.time()))'", returnStdout: true).trim()
                     sh """
                         set -e
                         . ${CONDA_PATH}/etc/profile.d/conda.sh
                         conda activate ${CONDA_ENV}
+                        export PROJECT_NAME=${PROJECT_NAME}
                         python3 trainandevaluate.py 2>&1 | tee train_log.txt
                     """
                     env.TRAIN_END = sh(script: "python3 -c 'import time; print(int(time.time()))'", returnStdout: true).trim()
@@ -72,7 +119,6 @@ import json, os, sys
 summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
 if not os.path.exists(summary_path):
     print('No summary file found at:', summary_path)
-    # create a file for downstream debugging/artifacts
     with open('validation_failure.txt', 'w') as f:
         f.write('No last_run_summary.json found. Check train_log.txt for errors.')
     sys.exit(1)
@@ -94,18 +140,15 @@ PY
             }
             post {
                 failure {
-                    echo "Model validation failed - archiving train_log.txt and validation_failure.txt for debugging"
+                    echo "Model validation failed"
                     archiveArtifacts artifacts: 'validation_failure.txt,train_log.txt', allowEmptyArchive: true, fingerprint: true
-                    sh '''
-                        echo "Manual intervention required due to model performance degradation"
-                    '''
                 }
             }
         }
 
         stage('Ensemble Creation Check') {
             steps {
-                echo "Checking if ensemble was created..."
+                echo "Checking ensemble creation..."
                 sh """
                     python3 - <<'PY'
 import json, os
@@ -114,13 +157,12 @@ if os.path.exists(summary_path):
     summary = json.load(open(summary_path))
     best = summary.get('best', {})
     if best.get('is_ensemble', False):
-        print('ENSEMBLE MODEL CREATED: ' + best.get('name', ''))
-        with open('ensemble_created.txt', 'w') as f:
-            f.write('Ensemble created: ' + best.get('name', ''))
+        print('ENSEMBLE MODEL CREATED:', best.get('name', ''))
+        open('ensemble_created.txt', 'w').write('Ensemble created: ' + best.get('name', ''))
     else:
-        print('No ensemble created - performance maintained')
+        print('No ensemble created')
 else:
-    print('No last_run_summary.json found - skipping ensemble check')
+    print('No summary file found')
 PY
                 """
             }
@@ -133,16 +175,14 @@ PY
 
         stage('Record Retrain Time Metric') {
             steps {
-                echo "Recording retrain time metric..."
                 sh """
                     python3 - <<'PY'
 import os
 start = int(os.environ.get('TRAIN_START', '0'))
 end = int(os.environ.get('TRAIN_END', '0'))
 t = end - start if (start and end) else 0
-with open('retrain_time.txt','w') as f:
-    f.write(str(t))
-print("retrain_time_seconds:", t)
+open('retrain_time.txt','w').write(str(t))
+print("Retrain time:", t)
 PY
                 """
                 archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', allowEmptyArchive: true, fingerprint: true
@@ -151,28 +191,24 @@ PY
 
         stage('Deploy Model') {
             steps {
-                echo "Deploying model..."
+                echo "Deploying model for: ${env.PROJECT_NAME}"
                 sh """
                     set -e
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
                     conda activate ${CONDA_ENV}
+
+                    export PROJECT_NAME=${PROJECT_NAME}
                     python3 deploy.py
 
                     if [ -f "${MODEL_DIR}/model_metadata.json" ]; then
                         python3 - <<'PY'
-import json, os, sys
+import json, os
 p = os.path.join("${MODEL_DIR}", "model_metadata.json")
-try:
-    m = json.load(open(p))
-    name = m.get('model_name') or m.get('best', {}).get('name') or 'unknown'
-    version = m.get('version') or (m.get('best', {}).get('registry') or {}).get('version') or 'N/A'
-    print(f"JENKINS: Deployed model -> name={name} version={version}")
-except Exception as e:
-    print("JENKINS: Failed to parse model_metadata.json:", e)
-    sys.exit(0)
+m = json.load(open(p))
+name = m.get('model_name') or m.get('best', {}).get('name')
+version = m.get('version') or (m.get('best', {}).get('registry') or {}).get('version')
+print(f"JENKINS: Deployed model: {name} v{version}")
 PY
-                    else
-                        echo "JENKINS: model_metadata.json not present after deployment"
                     fi
                 """
             }
@@ -180,23 +216,21 @@ PY
 
         stage('Run Flask App & Health Check') {
             steps {
-                echo "Checking Flask service health..."
                 sh """
-                    # optional: ensure your flask is running and listening on port 5000
                     if curl --max-time 5 --silent --fail http://localhost:5000/health; then
-                        echo 'Flask service is healthy!'
+                        echo "Flask OK"
                     else
-                        echo 'Flask service did not respond correctly!'
+                        echo "Flask is NOT healthy!"
                         exit 1
                     fi
                 """
             }
         }
+
     }
 
     post {
         always {
-            echo "Cleaning up workspace..."
             cleanWs()
         }
     }
