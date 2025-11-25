@@ -1,0 +1,60 @@
+<!-- templates/form_heart.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Heart Disease Prediction</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 12px; color: #222; }
+    .card { background:#fff; border:1px solid #e6e6e6; padding:14px; border-radius:8px; }
+    label { display:block; margin:8px 0 4px; font-weight:600; font-size:0.95rem;}
+    input[type="text"], input[type="number"] { width:100%; padding:8px; border:1px solid #ddd; border-radius:4px; box-sizing:border-box; }
+    .btn { display:inline-block; margin-top:12px; padding:10px 14px; background:#007bff; color:white; border:none; border-radius:6px; cursor:pointer; text-decoration:none; }
+    .result { margin-top:12px; padding:12px; background:#f8f9fa; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <h1>Heart Disease Prediction</h1>
+  <div class="card">
+    <form action="/predict" method="post" novalidate>
+      <label for="age">Age</label><input id="age" name="age" type="text" inputmode="numeric" />
+      <label for="sex">Sex (0=F,1=M)</label><input id="sex" name="sex" type="text" inputmode="numeric" />
+      <label for="cp">Chest pain type (0-3)</label><input id="cp" name="cp" type="text" />
+      <label for="trestbps">Resting blood pressure</label><input id="trestbps" name="trestbps" type="text" />
+      <label for="chol">Cholesterol</label><input id="chol" name="chol" type="text" />
+      <label for="fbs">Fasting blood sugar (0/1)</label><input id="fbs" name="fbs" type="text" />
+      <label for="restecg">Resting ecg (0-2)</label><input id="restecg" name="restecg" type="text" />
+      <label for="thalach">Max heart rate achieved</label><input id="thalach" name="thalach" type="text" />
+      <label for="exang">Exercise induced angina (0/1)</label><input id="exang" name="exang" type="text" />
+      <label for="oldpeak">ST depression</label><input id="oldpeak" name="oldpeak" type="text" />
+      <label for="slope">Slope (0-2)</label><input id="slope" name="slope" type="text" />
+      <label for="ca">Number of major vessels (0-4)</label><input id="ca" name="ca" type="text" />
+      <label for="thal">Thal (0-3)</label><input id="thal" name="thal" type="text" />
+      <button type="submit" class="btn">Predict</button>
+    </form>
+
+    {% if prediction %}
+      <div class="result">
+        <div><strong>Prediction:</strong> {{ prediction }}</div>
+        <div style="margin-top:6px;"><strong>Probability:</strong> {{ probability }}</div>
+      </div>
+    {% endif %}
+
+    {% if error_messages %}
+      <div class="result" style="background:#fff0f0;color:#b31b1b">
+        <strong>Errors:</strong>
+        <ul>
+        {% for e in error_messages %}
+          <li>{{ e }}</li>
+        {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+  </div>
+
+  <footer style="margin-top:16px;color:#666;font-size:0.9rem;">
+    Flask app hostname: {{ request.host }} • Visit <a href="/metrics">/metrics</a> for Prometheus metrics.
+  </footer>
+</body>
+</html>
