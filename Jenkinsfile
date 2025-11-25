@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        # base defaults - Jenkins will override per-stage for parallel runs
+        // base defaults - Jenkins will override per-stage for parallel runs
         BASE_MODEL_DIR = "${env.BASE_MODEL_DIR ?: 'models'}"
         BASE_DATA_DIR  = "${env.BASE_DATA_DIR ?: 'data'}"
         PROJECT_NAME = "${env.PROJECT_NAME ?: 'diabetes'}"
@@ -11,7 +11,7 @@ pipeline {
         MLFLOW_TRACKING_URI = "${env.MLFLOW_TRACKING_URI ?: 'http://localhost:5001'}"
         CONDA_PATH  = "/home/shreekar/miniconda3"
         CONDA_ENV   = "mlops-agp"
-        # names for systemd services used to run flask apps
+        // names for systemd services used to run flask apps
         DIABETES_SERVICE = "mlops-diabetes.service"
         HEART_SERVICE    = "mlops-heart.service"
     }
