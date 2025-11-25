@@ -58,28 +58,15 @@ pipeline {
             }
         }
 
-        // Remaining stages unchanged (Model Validation, Ensemble Creation Check, Record Retrain Time Metric, Deploy Model, Run Flask App & Health Check)
-        // Keep the rest of your existing Jenkinsfile stages (unchanged) — they work with PROJECT_NAME env.
-    }
-
-    post {
-        always {
-            echo "Cleaning up workspace..."
-            cleanWs()
-        }
-    }
-}
-
-
         stage('Model Validation') {
             steps {
                 echo "Validating model performance against previous best..."
-                sh """
+                sh '''
                     set -e
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
                     conda activate ${CONDA_ENV}
 
-                    python3 - <<-'PY'
+                    python3 - <<'PY'
 import json, os, sys
 
 summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
@@ -101,16 +88,15 @@ if not should_deploy:
 
 print(f'Model validation passed: {deploy_reason}')
 PY
-                """
+                '''
             }
             post {
                 failure {
                     echo "Model validation failed - performance degradation detected"
-                    archiveArtifacts artifacts: 'validation_failure.txt', fingerprint: true
-                    // Optionally trigger manual review workflow
-                    sh """
+                    archiveArtifacts artifacts: 'validation_failure.txt', allowEmptyArchive: true, fingerprint: true
+                    sh '''
                         echo "Manual intervention required due to model performance degradation"
-                    """
+                    '''
                 }
             }
         }
@@ -118,8 +104,8 @@ PY
         stage('Ensemble Creation Check') {
             steps {
                 echo "Checking if ensemble was created..."
-                sh """
-                    python3 - <<-'PY'
+                sh '''
+                    python3 - <<'PY'
 import json, os
 
 summary_path = os.path.join('${MODEL_DIR}', 'last_run_summary.json')
@@ -134,11 +120,11 @@ if os.path.exists(summary_path):
     else:
         print('No ensemble created - performance maintained')
 PY
-                """
+                '''
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'ensemble_created.txt', fingerprint: true
+                    archiveArtifacts artifacts: 'ensemble_created.txt', allowEmptyArchive: true, fingerprint: true
                 }
             }
         }
@@ -146,7 +132,7 @@ PY
         stage('Record Retrain Time Metric') {
             steps {
                 echo "Recording retrain time metric..."
-                sh """
+                sh '''
                     python3 - <<'PY'
 import os
 start = int(os.environ.get('TRAIN_START', '0'))
@@ -156,15 +142,15 @@ with open('retrain_time.txt','w') as f:
     f.write(str(t))
 print("retrain_time_seconds:", t)
 PY
-                """
-                archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', fingerprint: true
+                '''
+                archiveArtifacts artifacts: 'train_log.txt,retrain_time.txt', allowEmptyArchive: true, fingerprint: true
             }
         }
 
         stage('Deploy Model') {
             steps {
                 echo "Deploying model..."
-                sh """
+                sh '''
                     set -e
                     . ${CONDA_PATH}/etc/profile.d/conda.sh
                     conda activate ${CONDA_ENV}
@@ -187,7 +173,7 @@ PY
                     else
                         echo "JENKINS: model_metadata.json not present after deployment"
                     fi
-                """
+                '''
             }
         }
 
