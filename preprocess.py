@@ -73,7 +73,7 @@ def preprocess_heart(data_url=None, out_dir=OUT_DIR):
     thalach, exang, oldpeak, slope, ca, thal, target
     """
     print("[preprocess] Running heart-disease preprocessing")
-    url = data_url or os.getenv("DATA_URL", "data/heart.csv")
+    url = data_url or os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/heart.csv")
     df = pd.read_csv(url)
 
     # detect label
