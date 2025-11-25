@@ -12,13 +12,11 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  - job_name: 'flask_app_diabetes'
-    static_configs:
-      - targets: ['host.docker.internal:5000']   # or 'localhost:5000' if Prometheus runs on host
-
-  - job_name: 'flask_app_heart'
-    static_configs:
-      - targets: ['host.docker.internal:5005']    
+  - job_name: 'flask_apps'
+  metrics_path: /metrics
+  static_configs:
+    - targets: ['localhost:5000','localhost:5005']
+    
 
   - job_name: 'pushgateway'
     metrics_path: /metrics
