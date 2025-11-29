@@ -26,7 +26,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 def preprocess_diabetes(data_url=None, out_dir=OUT_DIR):
     print("[preprocess] Running diabetes preprocessing")
     columns = ['Pregnancies','Glucose','BloodPressure','SkinThickness','Insulin','BMI','DiabetesPedigreeFunction','Age','Outcome']
-    url = data_url or os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/diabetes.csv")
+    url = data_url or os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/diabetes_new.csv")
     df = pd.read_csv(url, names=columns, header=0)
     na_columns = ['Glucose','BloodPressure','SkinThickness','Insulin','BMI']
     df[na_columns] = df[na_columns].replace(0, np.nan)
@@ -73,7 +73,7 @@ def preprocess_heart(data_url=None, out_dir=OUT_DIR):
     thalach, exang, oldpeak, slope, ca, thal, target
     """
     print("[preprocess] Running heart-disease preprocessing")
-    url = data_url or os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/heart.csv")
+    url = data_url or os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/heart_new.csv")
     df = pd.read_csv(url)
 
     # detect label
