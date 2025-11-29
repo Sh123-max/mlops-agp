@@ -13,12 +13,15 @@ scrape_configs:
       - targets: ['localhost:9090']
 
   - job_name: 'flask_apps'
-  metrics_path: /metrics
-  static_configs:
-    - targets: ['localhost:5000','localhost:5005']
-    
+    # Prometheus will scrape the /metrics endpoint on these targets
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:5000', 'host.docker.internal:5005']
+      # If host.docker.internal is not available on your Linux host, replace the
+      # above targets with the host IP (e.g. '192.168.1.10:5000') OR run Prometheus
+      # with network_mode: "host" so it can reach localhost on the host.
 
   - job_name: 'pushgateway'
-    metrics_path: /metrics
+    metrics_path: '/metrics'
     static_configs:
       - targets: ['pushgateway:9091']
