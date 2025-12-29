@@ -14,17 +14,16 @@ os.makedirs(OUT_DIR, exist_ok=True)
 # --- Feature Engineering Logic ---
 
 def engineer_diabetes_features(df):
-    """Adds domain-specific features for Diabetes prediction."""
-    # 1. Body Mass Index / Age interaction (Risk increases with both)
+    """Adds domain-specific features for Diabetes prediction (Total 13)."""
+    # Original 3
     df['BMI_Age_Interaction'] = df['BMI'] * df['Age']
-   
-    # 2. Glucose / Insulin ratio (Measure of insulin sensitivity)
-    # Using small epsilon to avoid division by zero
     df['Glucose_Insulin_Ratio'] = df['Glucose'] / (df['Insulin'] + 0.1)
-   
-    # 3. Categorical Binning for Age
     df['Is_Senior'] = (df['Age'] > 50).astype(int)
-   
+    
+    # NEW: Add 2 more to satisfy the 13-feature requirement of your model
+    df['Glucose_Age_Interaction'] = df['Glucose'] * df['Age']
+    df['BMI_Age_Ratio'] = df['BMI'] / (df['Age'] + 1)
+    
     return df
 
 def engineer_heart_features(df):
