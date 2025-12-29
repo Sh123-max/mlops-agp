@@ -130,7 +130,9 @@ MODEL_UPTIME = Gauge(
 
 # Set static metrics
 if model_metrics:
-    MODEL_ACCURACY.labels(PROJECT).set(float(model_metrics.get("accuracy", 0.0)))
+    try:
+        MODEL_ACCURACY.labels(PROJECT).set(float(model_metrics.get("accuracy", 0.0)))
+    except: pass
 MODEL_INFO.labels(PROJECT, model_name, HOSTNAME).set(1)
 
 # ==========================================================
@@ -160,9 +162,38 @@ def predict():
         )
 
     try:
-        inputs = [float(request.form[k]) for k in request.form]
-        sample = np.array([inputs])
+        # 1. Collect the 8 raw inputs from the HTML form
+        raw_inputs = {
+            'Pregnancies': float(request.form.get('Pregnancies', 0)),
+            'Glucose': float(request.form.get('Glucose', 0)),
+            'BloodPressure': float(request.form.get('BloodPressure', 0)),
+            'SkinThickness': float(request.form.get('SkinThickness', 0)),
+            'Insulin': float(request.form.get('Insulin', 0)),
+            'BMI': float(request.form.get('BMI', 0)),
+            'DiabetesPedigreeFunction': float(request.form.get('DiabetesPedigreeFunction', 0)),
+            'Age': float(request.form.get('Age', 0))
+        }
 
+        # 2. FEATURE ENGINEERING (Sync with preprocess.py)
+        # We transform the 8 inputs into 11 features
+        processed_data = [
+            raw_inputs['Pregnancies'],
+            raw_inputs['Glucose'],
+            raw_inputs['BloodPressure'],
+            raw_inputs['SkinThickness'],
+            raw_inputs['Insulin'],
+            raw_inputs['BMI'],
+            raw_inputs['DiabetesPedigreeFunction'],
+            raw_inputs['Age'],
+            # New Engineered features:
+            raw_inputs['BMI'] * raw_inputs['Age'],                   # BMI_Age_Interaction
+            raw_inputs['Glucose'] / (raw_inputs['Insulin'] + 0.1),   # Glucose_Insulin_Ratio
+            1.0 if raw_inputs['Age'] > 50 else 0.0                  # Is_Senior
+        ]
+
+        sample = np.array([processed_data])
+
+        # 3. INFERENCE
         t0 = time.time()
         pred = model.predict(sample)[0]
         proba = model.predict_proba(sample)[0][1] if hasattr(model, "predict_proba") else 0.5
@@ -175,7 +206,7 @@ def predict():
 
         return render_template(
             "form.html",
-            prediction="Diabetic" if pred else "Not Diabetic",
+            prediction="Diabetic" if pred == 1 else "Not Diabetic",
             probability=f"{proba:.2%}",
             error_messages=[],
             model_name=model_name,
@@ -186,7 +217,7 @@ def predict():
             "form.html",
             prediction=None,
             probability=None,
-            error_messages=[str(e)],
+            error_messages=[f"Processing error: {str(e)}"],
             model_name=model_name,
             model_metrics=model_metrics
         )
