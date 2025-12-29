@@ -1,3 +1,4 @@
+# ========================= ORIGINAL CODE (RETAINED AS-IS) =========================
 import os
 import json
 import time
@@ -180,6 +181,11 @@ def train_and_log(name, model):
 
         mlflow.sklearn.log_model(model, "model")
 
+        # ===== REGISTER MODEL (MERGED FROM SECOND CODE) =====
+        model_uri = f"runs:/{run.info.run_id}/model"
+        mlflow.register_model(model_uri, f"{PROJECT_NAME}_model")
+        # ===================================================
+
         # ===== PROMETHEUS METRICS PUSH (PER MODEL) =====
         ML_ACCURACY.labels(PROJECT_NAME, name).set(acc)
         ML_PRECISION.labels(PROJECT_NAME, name).set(prec)
@@ -220,6 +226,34 @@ best = max(results, key=lambda x: x["weighted_score"])
 for r in results:
     ML_BEST.labels(PROJECT_NAME, r["name"]).set(1 if r["name"] == best["name"] else 0)
 # ===========================
+
+# ================= SAVE METADATA FOR UI (MERGED) =================
+PROJECT_MODEL_DIR = MODEL_DIR / PROJECT_NAME
+PROJECT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+metadata = {
+    "project": PROJECT_NAME,
+    "model_name": best["name"],
+    "run_id": best["run_id"],
+    "metrics": {
+        "accuracy": best["accuracy"],
+        "precision": best["precision"],
+        "recall": best["recall"],
+        "f1_score": best["f1_score"],
+        "roc_auc": best["roc_auc"],
+        "weighted_score": best["weighted_score"]
+    },
+    "feature_order": [
+        "Pregnancies","Glucose","BloodPressure","SkinThickness",
+        "Insulin","BMI","DiabetesPedigreeFunction","Age"
+    ],
+    "feature_count": 8,
+    "timestamp": time.time()
+}
+
+with open(PROJECT_MODEL_DIR / "model_metadata.json", "w") as f:
+    json.dump(metadata, f, indent=4)
+# ================================================================
 
 # ===== FINAL PUSH TO PUSHGATEWAY =====
 if PUSHGATEWAY_URL:
