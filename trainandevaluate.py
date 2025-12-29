@@ -178,13 +178,16 @@ def train_and_log(name, model):
         )
 
         mlflow.log_metrics({
-            "accuracy": acc, "precision": prec, "recall": rec,
-            "f1": f1, "roc_auc": roc,
+            "accuracy": acc,
+            "precision": prec,
+            "recall": rec,
+            "f1": f1,
+            "roc_auc": roc,
             "weighted_score": weighted
         })
+
         mlflow.sklearn.log_model(model, "model")
 
-        # PROMETHEUS PER MODEL
         ML_ACCURACY.labels(PROJECT_NAME,name).set(acc)
         ML_PRECISION.labels(PROJECT_NAME,name).set(prec)
         ML_RECALL.labels(PROJECT_NAME,name).set(rec)
@@ -214,15 +217,32 @@ with ThreadPoolExecutor(max_workers=3) as ex:
 best = max(results, key=lambda x: x["weighted"])
 
 for r in results:
-    ML_BEST.labels(PROJECT_NAME, r["name"]).set(1 if r["name"]==best["name"] else 0)
+    ML_BEST.labels(PROJECT_NAME, r["name"]).set(1 if r["name"] == best["name"] else 0)
 
-# REGISTER ONLY BEST
-marker = MODEL_DIR / ".registered"
-if not marker.exists():
-    mlflow.register_model(f"runs:/{best['run_id']}/model", f"{PROJECT_NAME}_model")
-    marker.write_text("done")
+# ==========================================================
+# REGISTER ONLY BEST MODEL (MLFLOW REGISTRY SAFE)
+# ==========================================================
+def register_best_model_once(best_run_id, project_name):
+    registry_name = f"{project_name}_model"
 
-# PUSH PROMETHEUS ONCE
+    try:
+        versions = client.search_model_versions(f"name='{registry_name}'")
+        for v in versions:
+            if v.run_id == best_run_id:
+                print(f"[MLFLOW] Run {best_run_id} already registered as version {v.version}")
+                return
+    except Exception as e:
+        print("[MLFLOW] Registry lookup failed (safe):", e)
+
+    model_uri = f"runs:/{best_run_id}/model"
+    mv = mlflow.register_model(model_uri, registry_name)
+    print(f"[MLFLOW] Registered model {registry_name}, version {mv.version}")
+
+register_best_model_once(best["run_id"], PROJECT_NAME)
+
+# ==========================================================
+# PUSH PROMETHEUS METRICS
+# ==========================================================
 if PUSHGATEWAY_URL:
     push_to_gateway(
         PUSHGATEWAY_URL.replace("http://",""),
@@ -230,4 +250,4 @@ if PUSHGATEWAY_URL:
         registry=PROM_REGISTRY
     )
 
-print("PIPELINE COMPLETED. BEST:", best)
+print("PIPELINE COMPLETED. BEST MODEL:", best)
