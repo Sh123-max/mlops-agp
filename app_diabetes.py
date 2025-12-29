@@ -174,21 +174,22 @@ def predict():
             'Age': float(request.form.get('Age', 0))
         }
 
-        # 2. FEATURE ENGINEERING (Sync with preprocess.py)
-        # We transform the 8 inputs into 11 features
+        # 2. FEATURE ENGINEERING (Must match the updated 13-feature preprocess.py)
         processed_data = [
-            raw_inputs['Pregnancies'],
-            raw_inputs['Glucose'],
-            raw_inputs['BloodPressure'],
-            raw_inputs['SkinThickness'],
-            raw_inputs['Insulin'],
-            raw_inputs['BMI'],
-            raw_inputs['DiabetesPedigreeFunction'],
-            raw_inputs['Age'],
-            # New Engineered features:
-            raw_inputs['BMI'] * raw_inputs['Age'],                   # BMI_Age_Interaction
-            raw_inputs['Glucose'] / (raw_inputs['Insulin'] + 0.1),   # Glucose_Insulin_Ratio
-            1.0 if raw_inputs['Age'] > 50 else 0.0                  # Is_Senior
+            raw_inputs['Pregnancies'],               # 1
+            raw_inputs['Glucose'],                   # 2
+            raw_inputs['BloodPressure'],             # 3
+            raw_inputs['SkinThickness'],             # 4
+            raw_inputs['Insulin'],                   # 5
+            raw_inputs['BMI'],                       # 6
+            raw_inputs['DiabetesPedigreeFunction'],  # 7
+            raw_inputs['Age'],                       # 8
+            # Engineered Features
+            raw_inputs['BMI'] * raw_inputs['Age'],                   # 9
+            raw_inputs['Glucose'] / (raw_inputs['Insulin'] + 0.1),   # 10
+            1.0 if raw_inputs['Age'] > 50 else 0.0,                  # 11
+            raw_inputs['Glucose'] * raw_inputs['Age'],               # 12
+            raw_inputs['BMI'] / (raw_inputs['Age'] + 1)              # 13
         ]
 
         sample = np.array([processed_data])
