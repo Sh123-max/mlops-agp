@@ -619,6 +619,22 @@ try:
 except Exception as e:
     print("Failed to write model metadata:", e)
 
+#visualisations
+# after summary / metadata creation
+try:
+    from visualisation import generate_visualizations
+    generate_visualizations(
+        project=PROJECT_NAME,
+        model_dir=str(MODEL_DIR),
+        X_test=X_test,
+        y_test=y_test,
+        results=results,
+        best=best
+    )
+    print("[VIS] Visualization HTML files generated")
+except Exception as e:
+    print("[VIS] Visualization generation failed:", e)
+
 # ==========================================================
 # EXPORT RETRAIN TIME METRIC VIA HELPER
 # ==========================================================
