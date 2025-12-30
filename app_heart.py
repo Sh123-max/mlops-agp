@@ -92,7 +92,7 @@ def predict():
     raw_data = {}
     errors = []
    
-    # 1. Collect & Validate Raw Features
+    # Collect & Validate Raw Features
     for key in RAW_FEATURES:
         raw_val = request.form.get(key, "")
         if raw_val == "":
@@ -113,15 +113,15 @@ def predict():
         return render_template('form_heart.html', error_messages=errors, model_name=model_name, model_metrics=model_metrics)
 
     try:
-        # 2. FEATURE ENGINEERING (Must match preprocess.py)
+        #  FEATURE ENGINEERING ( matching preprocess.py)
         # Create the engineered features from raw dictionary
         high_risk_combo = 1.0 if (raw_data['trestbps'] > 130 and raw_data['chol'] > 240) else 0.0
         hr_efficiency = raw_data['thalach'] / (220 - raw_data['age'])
 
         # 3. Construct Final Feature List (15 features)
-        final_inputs = [raw_data[k] for k in RAW_FEATURES] # 13 raw
-        final_inputs.append(high_risk_combo)               # 14th
-        final_inputs.append(hr_efficiency)                 # 15th
+        final_inputs = [raw_data[k] for k in RAW_FEATURES]
+        final_inputs.append(high_risk_combo)               
+        final_inputs.append(hr_efficiency)                 
 
         sample = np.array([final_inputs])
        
