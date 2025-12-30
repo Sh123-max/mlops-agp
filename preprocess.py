@@ -30,7 +30,6 @@ def engineer_heart_features(df):
     """Adds domain-specific features for Heart Disease prediction."""
     # 1. Risk Score: Combined high blood pressure and high cholesterol
     # Using common medical thresholds (e.g., Systolic > 130 or Chol > 240)
-    # Note: These thresholds depend on your dataset's specific units
     df['High_Risk_Combo'] = ((df['trestbps'] > 130) & (df['chol'] > 240)).astype(int)
    
     # 2. Maximum Heart Rate relative to Age
