@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        // base defaults - Jenkins will override per-stage for parallel runs
+        
         BASE_MODEL_DIR = "${env.BASE_MODEL_DIR ?: 'models'}"
         BASE_DATA_DIR  = "${env.BASE_DATA_DIR ?: 'data'}"
         PROJECT_NAME = "${env.PROJECT_NAME ?: 'diabetes'}"
