@@ -44,7 +44,7 @@ def engineer_heart_features(df):
 def preprocess_diabetes(data_url=None, out_dir=OUT_DIR):
     print("[preprocess] Running diabetes preprocessing with Feature Engineering")
     columns = ['Pregnancies','Glucose','BloodPressure','SkinThickness','Insulin','BMI','DiabetesPedigreeFunction','Age','Outcome']
-    url = data_url or os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/diabetes_new.csv")
+    url = data_url or os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/diabetes.csv")
     df = pd.read_csv(url, names=columns, header=0)
    
     na_columns = ['Glucose','BloodPressure','SkinThickness','Insulin','BMI']
@@ -89,7 +89,7 @@ def preprocess_diabetes(data_url=None, out_dir=OUT_DIR):
 
 def preprocess_heart(data_url=None, out_dir=OUT_DIR):
     print("[preprocess] Running heart-disease preprocessing with Feature Engineering")
-    url = data_url or os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/heart_new.csv")
+    url = data_url or os.getenv("DATA_URL", "https://raw.githubusercontent.com/Sh123-max/mlops-agp/main/heart.csv")
     df = pd.read_csv(url)
 
     if "target" in df.columns: label_col = "target"
