@@ -47,7 +47,6 @@ def _load_best_model(project, model_dir, best_dict):
     if not best_name:
         raise RuntimeError("No best model name in best dict")
 
-    # 1) prefer deployed_model folder if present
     deployed_dir = os.path.join(model_dir, "deployed_model")
     if os.path.isdir(deployed_dir):
         # pick first pkl/joblib in deployed_dir
@@ -56,7 +55,6 @@ def _load_best_model(project, model_dir, best_dict):
                 path = os.path.join(deployed_dir, fn)
                 return joblib.load(path), best_name
 
-    # 2) fall back to training artifacts
     candidates = [
         os.path.join(model_dir, f"{best_name}_model.pkl"),
         os.path.join(model_dir, f"{best_name}_model.joblib"),
@@ -69,8 +67,7 @@ def _load_best_model(project, model_dir, best_dict):
 
 
 def _get_feature_names(model, X_test):
-    # Try to infer feature names; if none, use generic feat_i
-    # If you later store feature names in metadata, you can read them here instead
+
     n_feats = X_test.shape[1]
     return [f"feat_{i}" for i in range(n_feats)]
 
