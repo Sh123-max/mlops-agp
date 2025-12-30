@@ -6,12 +6,12 @@ import mlflow
 from mlflow.tracking import MlflowClient
 from datetime import datetime
 
-# ================= CONFIG =================
+#CONFIG
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
 
-# ================= HELPERS =================
+
 def _ensure_dir(path):
     os.makedirs(path, exist_ok=True)
     return path
@@ -32,7 +32,7 @@ def write_metadata(project_dir, metadata):
         json.dump(metadata, f, indent=2)
     return meta_path
 
-# ================= MLflow HELPERS =================
+# MLflow 
 def download_artifacts_from_run(run_id, dst):
     _ensure_dir(dst)
     try:
@@ -44,9 +44,8 @@ def download_artifacts_from_run(run_id, dst):
         print(f"[WARN] Artifact download failed: {e}")
     return None
 
-# ================= DEPLOY =================
+#  DEPLOY 
 def deploy_best(project, stage="Staging"):
-    # FIX: Project-specific directories
     project_dir = _ensure_dir(os.path.join("models", project)) 
     deployed_dir = _ensure_dir(os.path.join(project_dir, "deployed_model"))
 
@@ -54,14 +53,13 @@ def deploy_best(project, stage="Staging"):
     root_meta_path = os.path.join("models", "model_metadata.json")
     
     if not os.path.exists(root_meta_path):
-        print(f"❌ No training metadata found at {root_meta_path}")
+        print(f" No training metadata found at {root_meta_path}")
         return False
 
     training_meta = json.load(open(root_meta_path))
     
-    # Ensure we are deploying the correct project
     if training_meta.get("project") != project:
-        print(f"❌ Metadata project ({training_meta.get('project')}) does not match requested ({project})")
+        print(f" Metadata project ({training_meta.get('project')}) does not match requested ({project})")
         return False
 
     best_info = training_meta.get("best", {})
@@ -69,7 +67,7 @@ def deploy_best(project, stage="Staging"):
     best_name = best_info.get("name")
 
     if not run_id:
-        print("❌ No run_id found in metadata.")
+        print(" No run_id found in metadata.")
         return False
 
     print(f"[INFO] Deploying {project} model: {best_name} (Run: {run_id})")
@@ -93,7 +91,7 @@ def deploy_best(project, stage="Staging"):
             "deployed_at": datetime.now().isoformat()
         }
         write_metadata(project_dir, metadata)
-        print(f"✅ Deployed successfully to {deployed_dir}")
+        print(f"Deployed successfully to {deployed_dir}")
         return True
 
     return False
