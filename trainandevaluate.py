@@ -1,6 +1,4 @@
-# ==========================================================
-# IMPORTS
-# ==========================================================
+
 import os
 import json
 import time
@@ -36,9 +34,6 @@ from xgboost import XGBClassifier
 # Prometheus client (new)
 from prometheus_client import Gauge, CollectorRegistry, push_to_gateway  # [web:9][web:11]
 
-# ==========================================================
-# OPTIONAL HELPERS (SAFE FALLBACKS)
-# ==========================================================
 try:
     from metrics_history import MetricsHistory
 except ImportError:
@@ -63,9 +58,9 @@ except Exception:
     def export_retrain_time(*args, **kwargs):
         return
 
-# ==========================================================
-# CONFIG
-# ==========================================================
+
+# CONFIGURATION
+
 PROJECT_NAME = os.getenv("PROJECT_NAME", "diabetes")
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
@@ -99,9 +94,9 @@ client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
 print("MLflow tracking URI:", mlflow.get_tracking_uri())
 print("NUM_WORKER_THREADS:", NUM_WORKER_THREADS)
 
-# ==========================================================
+
 # PROMETHEUS REGISTRY + METRICS (NEW)
-# ==========================================================
+
 PROM_REGISTRY = CollectorRegistry()
 
 ML_ACCURACY = Gauge("ml_model_accuracy", "Model accuracy", ["project", "model"], registry=PROM_REGISTRY)
@@ -116,9 +111,9 @@ ML_LATENCY = Gauge("ml_model_inference_latency_seconds", "Inference latency", ["
 ML_MODEL_SIZE = Gauge("ml_model_size_bytes", "Serialized model size", ["project", "model"], registry=PROM_REGISTRY)
 ML_BEST = Gauge("ml_best_model_indicator", "1 if model is selected as best", ["project", "model"], registry=PROM_REGISTRY)
 
-# ==========================================================
-# LOAD DATA
-# ==========================================================
+
+# LOADING DATA
+
 X_train = joblib.load(os.path.join(DATA_DIR, "X_train.pkl"))
 X_test = joblib.load(os.path.join(DATA_DIR, "X_test.pkl"))
 y_train = joblib.load(os.path.join(DATA_DIR, "y_train.pkl"))
@@ -139,9 +134,9 @@ try:
 except Exception:
     X_train_unscaled_df = None
 
-# ==========================================================
+
 # MODELS
-# ==========================================================
+
 models = {
     "LogisticRegression": LogisticRegression(max_iter=2000),
     "RandomForest": RandomForestClassifier(random_state=42, n_jobs=1),
@@ -168,9 +163,8 @@ stacking = StackingClassifier(
 )
 models["StackingEnsemble"] = stacking  # [web:24]
 
-# ==========================================================
 # HELPERS
-# ==========================================================
+
 def safe_roc_auc(y_true, y_score):
     try:
         return float(roc_auc_score(y_true, y_score))
@@ -243,9 +237,9 @@ def validate_against_previous_best(current_best, previous_best):
     else:
         return False, f"Significant performance drop: {score_drop:.4f}. Manual review required."
 
-# ==========================================================
+
 # TRAIN FUNCTION (MLflow + Prometheus)
-# ==========================================================
+
 def train_and_log(name, model):
     run_name = f"{PROJECT_NAME}__{name}__{int(time.time())}"
     try:
@@ -364,9 +358,9 @@ def train_and_log(name, model):
         traceback.print_exc()
         return {"name": name, "error": str(e)}
 
-# ==========================================================
+
 # MAIN TRAIN ALL MODELS
-# ==========================================================
+
 results = []
 with ThreadPoolExecutor(max_workers=NUM_WORKER_THREADS) as ex:
     futures = {ex.submit(train_and_log, n, m): n for n, m in models.items()}
@@ -431,9 +425,9 @@ else:
             "registry": None,
         }
 
-# ==========================================================
+
 # ENSEMBLE LOGIC + METRICS HISTORY
-# ==========================================================
+
 metrics_history = MetricsHistory()
 previous_best = metrics_history.get_previous_best()
 
@@ -488,7 +482,7 @@ if current_best_model and previous_best_score is not None:
         else:
             print("Ensemble did not improve performance. Keeping current best model.")
 
-# Record all successful runs in history
+# Recording all successful runs in history
 for result in results:
     if "error" not in result:
         metrics_history.add_training_run(result)
@@ -499,9 +493,9 @@ best["should_deploy"] = should_deploy
 best["deploy_reason"] = deploy_reason
 print(f"Deployment decision: {should_deploy}, Reason: {deploy_reason}")
 
-# ==========================================================
-# MLflow REGISTRATION (ONLY IF APPROVED)
-# ==========================================================
+
+# MLflow REGISTRATION 
+
 if best.get("run_id") and best.get("name") and should_deploy:
     run_id = best["run_id"]
     registry_name = f"{PROJECT_NAME}_{best['name']}"
@@ -544,9 +538,9 @@ if best.get("run_id") and best.get("name") and should_deploy:
 else:
     print(f"[MAIN] Skipping model registration - deployment not approved: {deploy_reason}")
 
-# ==========================================================
+
 # SUMMARY JSON + METADATA (BASELINE DISTRIBUTIONS)
-# ==========================================================
+
 summary = {
     "project": PROJECT_NAME,
     "results": results,
@@ -619,8 +613,8 @@ try:
 except Exception as e:
     print("Failed to write model metadata:", e)
 
-#visualisations
-# after summary / metadata creation
+#Visualisations
+
 try:
     from visualisation import generate_visualizations
     generate_visualizations(
@@ -635,9 +629,9 @@ try:
 except Exception as e:
     print("[VIS] Visualization generation failed:", e)
 
-# ==========================================================
-# EXPORT RETRAIN TIME METRIC VIA HELPER
-# ==========================================================
+
+# EXPORTING RETRAIN TIME METRIC 
+
 try:
     # choose retrain_time from the chosen model result (fallback to first valid result)
     chosen_res = None
@@ -660,17 +654,16 @@ try:
 except Exception as e:
     print("[MONITOR] Could not determine retrain time to export:", e)
 
-# ==========================================================
 # MARK BEST MODEL IN PROMETHEUS
-# ==========================================================
+
 for r in valid_results:
     model_name = r["name"]
     is_best = 1 if model_name == best.get("name") else 0
     ML_BEST.labels(PROJECT_NAME, model_name).set(is_best)
 
-# ==========================================================
+
 # PUSH METRICS TO PUSHGATEWAY
-# ==========================================================
+
 if PUSHGATEWAY_URL:
     try:
         # Prometheus native push (preferred)
