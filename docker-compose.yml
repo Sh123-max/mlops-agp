@@ -30,7 +30,7 @@ services:
     depends_on:
       - postgres
     environment:
-      # ensure these are set in your .env or override here
+      
       - MLFLOW_BACKEND_STORE_URI=${MLFLOW_BACKEND_STORE_URI}
       - MLFLOW_ARTIFACT_ROOT=${MLFLOW_ARTIFACT_ROOT}
     volumes:
