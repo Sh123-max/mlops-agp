@@ -1,4 +1,4 @@
-# Fixed, tested packages for this project (use inside conda env mlops-agp)
+
 mlflow==2.5.0
 numpy==1.26.0
 pandas==2.2.2
