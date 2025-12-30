@@ -10,16 +10,15 @@ from prometheus_client import Gauge, Counter, Histogram
 from prometheus_flask_exporter import PrometheusMetrics
 import glob
 
-# ==========================================================
-# CONFIG
-# ==========================================================
+# CONFIGURATION
+
 PROJECT = os.getenv("PROJECT_NAME", "diabetes")
 MODEL_BASE_DIR = os.getenv("MODEL_DIR", "models")
 
 PROJECT_MODEL_DIR = os.path.join(MODEL_BASE_DIR, PROJECT)
 DEPLOYED_DIR = os.path.join(PROJECT_MODEL_DIR, "deployed_model")
 
-# IMPORTANT FILES
+
 LAST_SUMMARY_PATH = os.path.join(MODEL_BASE_DIR, "last_run_summary.json")
 META_PATH = os.path.join(PROJECT_MODEL_DIR, "model_metadata.json")
 
@@ -30,14 +29,13 @@ expected_feature_order = None
 expected_feature_count = None
 start_time = time.time()
 
-# ==========================================================
-# LOAD MODEL + METRICS
-# ==========================================================
+# LOADING MODEL and METRICS
+
 def load_project_model():
     global model, model_name, model_metrics
     global expected_feature_order, expected_feature_count
 
-    # ---------- 1. LOAD LATEST METRICS ----------
+    # LOAD LATEST METRICS 
     model_metrics = {}
 
     if os.path.exists(LAST_SUMMARY_PATH):
@@ -56,7 +54,7 @@ def load_project_model():
         except Exception as e:
             print(f"[{PROJECT}] Failed loading last summary: {e}")
 
-    # ---------- 2. FALLBACK TO METADATA ----------
+    # FALLBACK TO METADATA
     if not model_metrics and os.path.exists(META_PATH):
         try:
             meta = json.load(open(META_PATH))
@@ -68,7 +66,7 @@ def load_project_model():
         except Exception as e:
             print(f"[{PROJECT}] Failed reading metadata: {e}")
 
-    # ---------- 3. LOAD DEPLOYED MODEL ----------
+    #  LOAD DEPLOYED MODEL 
     candidates = []
     if os.path.exists(DEPLOYED_DIR):
         candidates += glob.glob(f"{DEPLOYED_DIR}/model/*.pkl")
@@ -88,12 +86,11 @@ def load_project_model():
     else:
         print(f"[{PROJECT}] No deployed model found")
 
-# Load once on startup
+
 load_project_model()
 
-# ==========================================================
 # FLASK + PROMETHEUS
-# ==========================================================
+
 app = Flask(__name__, template_folder="templates")
 metrics = PrometheusMetrics(app, path="/metrics")
 HOSTNAME = socket.gethostname()
@@ -135,9 +132,9 @@ if model_metrics:
     except: pass
 MODEL_INFO.labels(PROJECT, model_name, HOSTNAME).set(1)
 
-# ==========================================================
+
 # UI ROUTES
-# ==========================================================
+
 @app.route("/")
 def home():
     return render_template(
@@ -162,7 +159,7 @@ def predict():
         )
 
     try:
-        # 1. Collect the 8 raw inputs from the HTML form
+        #  Collect the 8 raw inputs from the HTML form
         raw_inputs = {
             'Pregnancies': float(request.form.get('Pregnancies', 0)),
             'Glucose': float(request.form.get('Glucose', 0)),
@@ -174,22 +171,22 @@ def predict():
             'Age': float(request.form.get('Age', 0))
         }
 
-        # 2. FEATURE ENGINEERING (Must match the updated 13-feature preprocess.py)
+        #  FEATURE ENGINEERING (13-feature preprocess.py)
         processed_data = [
-            raw_inputs['Pregnancies'],               # 1
-            raw_inputs['Glucose'],                   # 2
-            raw_inputs['BloodPressure'],             # 3
-            raw_inputs['SkinThickness'],             # 4
-            raw_inputs['Insulin'],                   # 5
-            raw_inputs['BMI'],                       # 6
-            raw_inputs['DiabetesPedigreeFunction'],  # 7
-            raw_inputs['Age'],                       # 8
+            raw_inputs['Pregnancies'],               
+            raw_inputs['Glucose'],                   
+            raw_inputs['BloodPressure'],             
+            raw_inputs['SkinThickness'],             
+            raw_inputs['Insulin'],                   
+            raw_inputs['BMI'],                       
+            raw_inputs['DiabetesPedigreeFunction'],  
+            raw_inputs['Age'],                       
             # Engineered Features
-            raw_inputs['BMI'] * raw_inputs['Age'],                   # 9
-            raw_inputs['Glucose'] / (raw_inputs['Insulin'] + 0.1),   # 10
-            1.0 if raw_inputs['Age'] > 50 else 0.0,                  # 11
-            raw_inputs['Glucose'] * raw_inputs['Age'],               # 12
-            raw_inputs['BMI'] / (raw_inputs['Age'] + 1)              # 13
+            raw_inputs['BMI'] * raw_inputs['Age'],                   
+            raw_inputs['Glucose'] / (raw_inputs['Insulin'] + 0.1),   
+            1.0 if raw_inputs['Age'] > 50 else 0.0,                  
+            raw_inputs['Glucose'] * raw_inputs['Age'],               
+            raw_inputs['BMI'] / (raw_inputs['Age'] + 1)              
         ]
 
         sample = np.array([processed_data])
@@ -234,7 +231,7 @@ def reload_model():
     load_project_model()
     return {"reloaded": True, "model": model_name}
 
-# ==========================================================
+
 if __name__ == "__main__":
     port = int(os.getenv("DIABETES_APP_PORT", "5000"))
     print(f"[app_diabetes] Running on port {port}")
